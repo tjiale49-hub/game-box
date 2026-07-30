@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>高能突击训练场 - 玩盒</title>
+    <meta
+      name="description"
+      content="玩盒首个网页 3D 枪战训练场，支持第一人称移动、射击、换弹、BOT、计分和波次挑战。"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main id="gameRoot" class="game-root">
+      <canvas id="gameCanvas" aria-label="高能突击训练场 3D 游戏画面"></canvas>
+
+      <section class="boot-screen" id="bootScreen">
+        <div class="boot-card">
+          <p class="eyebrow">STRIKE ARENA</p>
+          <h1>高能突击训练场</h1>
+          <p>
+            第一人称网页 FPS 原型。点击开始后进入训练场，击破移动 BOT，保持血量并刷新连杀。
+          </p>
+          <div class="control-grid">
+            <span>WASD 移动</span>
+            <span>鼠标瞄准</span>
+            <span>左键开火</span>
+            <span>R 换弹</span>
+            <span>Shift 冲刺</span>
+            <span>Esc 解锁鼠标</span>
+          </div>
+          <button id="startBtn" type="button">开始训练</button>
+          <a href="../../index.html">返回玩盒</a>
+        </div>
+      </section>
+
+      <section class="hud" aria-label="游戏状态">
+        <div class="top-left">
+          <a class="back-link" href="../../index.html">玩盒</a>
+          <div class="mode-chip">BOT 训练 / 沙漠仓库</div>
+        </div>
+        <div class="score-panel">
+          <span>击破 <strong id="kills">0</strong></span>
+          <span>波次 <strong id="wave">1</strong></span>
+          <span>连击 <strong id="streak">0</strong></span>
+        </div>
+        <div class="radar" id="radar"></div>
+        <div class="crosshair" aria-hidden="true">
+          <i></i><i></i><i></i><i></i>
+        </div>
+        <div class="hitmarker" id="hitmarker" aria-hidden="true">×</div>
+        <div class="damage-vignette" id="damageVignette" aria-hidden="true"></div>
+        <div class="bottom-left">
+          <div class="bar-label">护甲生命</div>
+          <div class="health-bar"><span id="healthFill"></span></div>
+          <strong id="healthText">100</strong>
+        </div>
+        <div class="bottom-right">
+          <span class="weapon-name">VX-9 CARBINE</span>
+          <strong><span id="ammo">30</span><small>/</small><span id="reserve">90</span></strong>
+          <button id="reloadBtn" type="button">换弹 R</button>
+        </div>
+        <div class="toast" id="toast" role="status" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <script type="module" src="./game.js"></script>
+  </body>
+</html>

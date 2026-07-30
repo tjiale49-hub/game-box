@@ -1,5 +1,15 @@
 const games = [
   {
+    title: "高能突击训练场",
+    status: "可玩",
+    state: "ready",
+    category: "action",
+    players: "单人",
+    href: "./games/strike-arena/",
+    color: "linear-gradient(135deg, #18f5ff, #ff4567)",
+    description: "网页 3D FPS 训练场：移动、瞄准、射击、换弹、BOT 波次和计分 HUD。",
+  },
+  {
     title: "霓虹贪吃蛇",
     status: "可玩",
     state: "ready",
