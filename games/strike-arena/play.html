@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>高能突击 - 对局中</title>
+    <meta
+      name="description"
+      content="高能突击网页 FPS 对局页，包含多模式 BOT 战斗、写实 HUD、武器反馈和地图训练。"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="play-body">
+    <main id="gameRoot" class="game-root">
+      <canvas id="gameCanvas" aria-label="高能突击 3D FPS 对局画面"></canvas>
+
+      <section class="boot-screen" id="bootScreen">
+        <div class="boot-card">
+          <p class="eyebrow" id="bootMode">STRIKE ARENA</p>
+          <h1 id="bootTitle">高能突击</h1>
+          <p id="bootDesc">
+            第一人称网页 FPS 对局。点击开始后进入战区，完成当前模式目标并刷新战绩。
+          </p>
+          <div class="control-grid">
+            <span>WASD 移动</span>
+            <span>鼠标瞄准</span>
+            <span>左键开火</span>
+            <span>R 换弹</span>
+            <span>Shift 冲刺</span>
+            <span>Esc 解锁鼠标</span>
+          </div>
+          <button id="startBtn" type="button">进入对局</button>
+          <a href="./index.html">返回大厅</a>
+        </div>
+      </section>
+
+      <section class="hud" aria-label="游戏状态">
+        <div class="top-left">
+          <a class="back-link" href="./index.html">大厅</a>
+          <div class="mode-chip" id="modeChip">BOT 训练 / 沙漠仓库</div>
+        </div>
+        <div class="score-panel">
+          <span>击破 <strong id="kills">0</strong></span>
+          <span id="roundLabel">波次 <strong id="wave">1</strong></span>
+          <span>连击 <strong id="streak">0</strong></span>
+        </div>
+        <div class="objective-panel" id="objectivePanel">
+          <small>当前目标</small>
+          <strong id="objectiveText">清理移动 BOT</strong>
+        </div>
+        <div class="radar" id="radar"></div>
+        <div class="crosshair" aria-hidden="true">
+          <i></i><i></i><i></i><i></i>
+        </div>
+        <div class="hitmarker" id="hitmarker" aria-hidden="true">×</div>
+        <div class="damage-vignette" id="damageVignette" aria-hidden="true"></div>
+        <div class="bottom-left">
+          <div class="bar-label">护甲生命</div>
+          <div class="health-bar"><span id="healthFill"></span></div>
+          <strong id="healthText">100</strong>
+        </div>
+        <div class="bottom-right">
+          <span class="weapon-name" id="weaponName">VX-9 CARBINE</span>
+          <strong><span id="ammo">30</span><small>/</small><span id="reserve">90</span></strong>
+          <button id="reloadBtn" type="button">换弹 R</button>
+        </div>
+        <div class="toast" id="toast" role="status" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <script type="module" src="./game.js"></script>
+  </body>
+</html>
