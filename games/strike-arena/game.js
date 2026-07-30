@@ -54,6 +54,10 @@ let scene;
 let camera;
 let renderer;
 let clock;
+let textureLoader;
+let enemyTexture;
+let enemyTextures = [];
+let scenicTexture;
 let weapon;
 let muzzleLight;
 let raycaster;
@@ -246,6 +250,50 @@ const MAPS = {
     spawn: [10, player.height, 20],
     nature: "wetlands",
   },
+  highland: {
+    name: "山地废村",
+    sky: 0x111712,
+    fog: 0x1f2a20,
+    ground: 0x3c3f2f,
+    concrete: 0x5a5143,
+    accent: 0x78634a,
+    glow: 0xd8b66a,
+    spawn: [-12, player.height, 24],
+    nature: "village",
+  },
+  harbor: {
+    name: "雨夜港区",
+    sky: 0x070c10,
+    fog: 0x0d1d26,
+    ground: 0x252d30,
+    concrete: 0x384148,
+    accent: 0x2f6070,
+    glow: 0x5ce0ff,
+    spawn: [14, player.height, 22],
+    nature: "harbor",
+  },
+  quarry: {
+    name: "山谷采石场",
+    sky: 0x14150f,
+    fog: 0x24251a,
+    ground: 0x565144,
+    concrete: 0x6a6558,
+    accent: 0x9a7d52,
+    glow: 0xffc36a,
+    spawn: [-8, player.height, 26],
+    nature: "quarry",
+  },
+  research: {
+    name: "林中研究站",
+    sky: 0x07110f,
+    fog: 0x10241e,
+    ground: 0x27362d,
+    concrete: 0x46514a,
+    accent: 0x8f9b8a,
+    glow: 0x9df3c4,
+    spawn: [8, player.height, 23],
+    nature: "research",
+  },
 };
 
 const WEAPONS = {
@@ -361,6 +409,24 @@ function makeMaterial(color, roughness = 0.55, metalness = 0.08) {
   });
 }
 
+function loadProjectTextures() {
+  textureLoader = new THREE.TextureLoader();
+  const colorSpace = THREE.SRGBColorSpace || THREE.LinearSRGBColorSpace;
+  scenicTexture = textureLoader.load("../../assets/strike-arena-hero.png");
+  enemyTextures = [
+    "../../assets/strike-enemy-operator-game.png",
+    "../../assets/strike-enemy-scout-game.png",
+    "../../assets/strike-enemy-heavy-game.png",
+  ].map((src) => textureLoader.load(src, (texture) => {
+    texture.needsUpdate = true;
+  }));
+  enemyTexture = enemyTextures[0];
+  [scenicTexture, ...enemyTextures].forEach((texture) => {
+    if (colorSpace) texture.colorSpace = colorSpace;
+    texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  });
+}
+
 function createGroundMaterial() {
   const canvas = document.createElement("canvas");
   canvas.width = 256;
@@ -408,8 +474,14 @@ function initScene() {
   });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.8));
   renderer.setSize(window.innerWidth, window.innerHeight);
+  if (THREE.SRGBColorSpace) renderer.outputColorSpace = THREE.SRGBColorSpace;
+  if (THREE.ACESFilmicToneMapping) {
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = selectedMap.nature ? 1.16 : 1.04;
+  }
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  loadProjectTextures();
 
   clock = new THREE.Clock();
   raycaster = new THREE.Raycaster();
@@ -454,6 +526,8 @@ function applyScenarioText() {
 }
 
 function createArena() {
+  createCinematicBackdrop();
+
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(86, 86, 1, 1),
     createGroundMaterial(),
@@ -469,12 +543,18 @@ function createArena() {
 
   const wallMat = makeMaterial(selectedMap.concrete, 0.82, 0.05);
   const accentMat = makeMaterial(selectedMap.accent, 0.64, 0.18);
+  if (selectedMap.nature) {
+    wallMat.transparent = true;
+    wallMat.opacity = 0.38;
+    wallMat.depthWrite = false;
+  }
 
+  const wallHeight = selectedMap.nature ? 0.72 : 5;
   const wallData = [
-    [0, 2.5, -43, 86, 5, 1],
-    [0, 2.5, 43, 86, 5, 1],
-    [-43, 2.5, 0, 1, 5, 86],
-    [43, 2.5, 0, 1, 5, 86],
+    [0, wallHeight / 2, -43, 86, wallHeight, 1],
+    [0, wallHeight / 2, 43, 86, wallHeight, 1],
+    [-43, wallHeight / 2, 0, 1, wallHeight, 86],
+    [43, wallHeight / 2, 0, 1, wallHeight, 86],
   ];
   wallData.forEach((data) => addBox(data, wallMat, false));
 
@@ -510,6 +590,50 @@ function createArena() {
   scene.add(ring);
 
   createArenaProps();
+}
+
+function createCinematicBackdrop() {
+  if (!selectedMap.nature) return;
+  const backdrop = new THREE.Mesh(
+    new THREE.PlaneGeometry(96, 54),
+    new THREE.MeshBasicMaterial({
+      map: scenicTexture,
+      color: 0xffffff,
+      transparent: true,
+      opacity: selectedMap.nature === "forest" ? 0.92 : 0.76,
+      depthWrite: false,
+    }),
+  );
+  backdrop.position.set(0, 18, -42.6);
+  backdrop.renderOrder = -20;
+  scene.add(backdrop);
+
+  const duskVeil = new THREE.Mesh(
+    new THREE.PlaneGeometry(96, 54),
+    new THREE.MeshBasicMaterial({
+      color: selectedMap.nature === "snow" ? 0xcad7dc : 0x07110d,
+      transparent: true,
+      opacity: selectedMap.nature === "forest" ? 0.1 : 0.16,
+      depthWrite: false,
+    }),
+  );
+  duskVeil.position.set(0, 18, -42.4);
+  duskVeil.renderOrder = -19;
+  scene.add(duskVeil);
+
+  const ridgeMat = new THREE.MeshBasicMaterial({
+    color: selectedMap.nature === "snow" ? 0x233444 : 0x07140e,
+    transparent: true,
+    opacity: 0.62,
+    depthWrite: false,
+  });
+  for (let i = 0; i < 3; i += 1) {
+    const ridge = new THREE.Mesh(new THREE.PlaneGeometry(64 - i * 10, 10 + i * 2), ridgeMat.clone());
+    ridge.position.set((i - 1) * 17, 5 + i * 1.2, -41.9 + i * 0.2);
+    ridge.rotation.z = (i - 1) * 0.05;
+    ridge.renderOrder = -18 + i;
+    scene.add(ridge);
+  }
 }
 
 function addBox([x, y, z, sx, sy, sz], material, collidable) {
@@ -583,7 +707,48 @@ function createArenaProps() {
   );
   objective.position.set(0, 0.1, 0);
   scene.add(objective);
+  createMapSignature();
   createNatureLayer();
+}
+
+function createMapSignature() {
+  if (!selectedMap.nature) return;
+  const hutMat = makeMaterial(selectedMap.accent, 0.88, 0.03);
+  const darkMat = makeMaterial(0x171a18, 0.72, 0.16);
+  const stoneMat = makeMaterial(selectedMap.concrete, 0.94, 0.02);
+
+  if (selectedMap.nature === "village") {
+    [[-18, -8], [-8, 16], [17, -15], [24, 12]].forEach(([x, z], index) => {
+      addBox([x, 1.1, z, 5.4, 2.2, 3.2], hutMat, true);
+      const roof = addBox([x, 2.45, z, 6.1, 0.34, 3.9], darkMat, false);
+      roof.rotation.z = index % 2 ? 0.06 : -0.06;
+    });
+    addBox([4, 0.55, -22, 14, 1.1, 1.2], stoneMat, true);
+  }
+
+  if (selectedMap.nature === "harbor") {
+    createWaterPatch(30, 2, 21, 86);
+    [[-20, -16], [-12, 12], [6, -6], [24, -20]].forEach(([x, z], index) => {
+      const container = addBox([x, 1.35, z, 6.8, 2.7, 2.5], index % 2 ? darkMat : hutMat, true);
+      addContainerRibs(container, [x, 1.35, z, 6.8, 2.7, 2.5]);
+    });
+    addBox([18, 0.35, 0, 2.2, 0.7, 86], stoneMat, true);
+  }
+
+  if (selectedMap.nature === "quarry") {
+    [[-24, -18, 8, 2.1, 5], [-8, 4, 12, 2.8, 4], [18, -10, 10, 2.4, 6], [24, 18, 7, 1.9, 5]].forEach(
+      ([x, z, sx, sy, sz]) => addBox([x, sy / 2, z, sx, sy, sz], stoneMat, true),
+    );
+    createWaterPatch(-21, 17, 12, 18);
+  }
+
+  if (selectedMap.nature === "research") {
+    [[-18, -12], [0, -18], [18, -10], [-10, 15], [14, 17]].forEach(([x, z]) => {
+      addBox([x, 1.45, z, 7.2, 2.9, 3.4], stoneMat, true);
+      addBox([x, 3.05, z, 5.8, 0.22, 2.6], darkMat, false);
+    });
+    createWaterPatch(24, 6, 8, 38);
+  }
 }
 
 function createTree(x, z, scale = 1, snowy = false) {
@@ -625,36 +790,79 @@ function createWaterPatch(x, z, sx, sz) {
     new THREE.MeshStandardMaterial({
       color: selectedMap.nature === "coast" ? 0x123d49 : 0x1f3f35,
       roughness: 0.18,
-      metalness: 0.2,
+      metalness: 0.38,
+      emissive: selectedMap.nature === "forest" ? 0x07130f : 0x061016,
       transparent: true,
-      opacity: 0.72,
+      opacity: 0.78,
     }),
   );
   water.rotation.x = -Math.PI / 2;
   water.position.set(x, 0.045, z);
   scene.add(water);
+
+  const glint = new THREE.Mesh(
+    new THREE.PlaneGeometry(sx * 0.82, Math.max(0.4, sz * 0.08)),
+    new THREE.MeshBasicMaterial({
+      color: selectedMap.glow,
+      transparent: true,
+      opacity: 0.14,
+      depthWrite: false,
+    }),
+  );
+  glint.rotation.x = -Math.PI / 2;
+  glint.rotation.z = -0.08;
+  glint.position.set(x + sx * 0.06, 0.055, z - sz * 0.1);
+  scene.add(glint);
+}
+
+function createFogSheet(x, y, z, width, height, opacity, rotation = 0) {
+  const fog = new THREE.Mesh(
+    new THREE.PlaneGeometry(width, height),
+    new THREE.MeshBasicMaterial({
+      color: selectedMap.nature === "snow" ? 0xd9e4e8 : 0xc9d7c5,
+      transparent: true,
+      opacity,
+      depthWrite: false,
+    }),
+  );
+  fog.position.set(x, y, z);
+  fog.rotation.y = rotation;
+  fog.renderOrder = -2;
+  scene.add(fog);
 }
 
 function createNatureLayer() {
   if (!selectedMap.nature) return;
   const snowy = selectedMap.nature === "snow";
-  const treeCount = selectedMap.nature === "coast" ? 12 : selectedMap.nature === "snow" ? 18 : 30;
+  const sparse = selectedMap.nature === "harbor" || selectedMap.nature === "quarry";
+  const treeCount = selectedMap.nature === "coast" ? 18 : selectedMap.nature === "snow" ? 24 : sparse ? 12 : 44;
   for (let i = 0; i < treeCount; i += 1) {
     const edge = Math.random() > 0.5;
     const x = edge ? (Math.random() > 0.5 ? 35 : -35) + Math.random() * 5 - 2.5 : -34 + Math.random() * 68;
     const z = edge ? -34 + Math.random() * 68 : (Math.random() > 0.5 ? 35 : -35) + Math.random() * 5 - 2.5;
     createTree(x, z, 0.75 + Math.random() * 0.65, snowy);
   }
-  for (let i = 0; i < 26; i += 1) {
+  for (let i = 0; i < 34; i += 1) {
     createRock(-34 + Math.random() * 68, -34 + Math.random() * 68, 0.3 + Math.random() * 0.9);
   }
   if (selectedMap.nature === "coast") {
     createWaterPatch(28, 0, 24, 86);
     addBox([11, 0.18, 0, 1.2, 0.36, 86], makeMaterial(0x777064, 0.88, 0.03), true);
   }
-  if (selectedMap.nature === "wetlands" || selectedMap.nature === "forest") {
+  if (selectedMap.nature === "wetlands" || selectedMap.nature === "forest" || selectedMap.nature === "village") {
     createWaterPatch(-18, -6, 7, 52);
     createWaterPatch(22, 18, 8, 28);
+  }
+  for (let i = 0; i < 7; i += 1) {
+    createFogSheet(
+      -30 + Math.random() * 60,
+      1.6 + Math.random() * 2.8,
+      -31 + Math.random() * 48,
+      14 + Math.random() * 20,
+      3.2 + Math.random() * 3.6,
+      selectedMap.nature === "forest" || selectedMap.nature === "village" || selectedMap.nature === "research" ? 0.06 : 0.08,
+      -0.65 + Math.random() * 1.3,
+    );
   }
 }
 
@@ -726,6 +934,16 @@ function spawnBot() {
     metalness: 0.02,
   });
   const visorMat = new THREE.MeshBasicMaterial({ color: selectedMap.glow });
+  const botTexture = enemyTextures.length ? enemyTextures[Math.floor(Math.random() * enemyTextures.length)] : enemyTexture;
+  if (botTexture) {
+    [armorMat, clothMat, skinMat].forEach((material) => {
+      material.transparent = true;
+      material.opacity = 0.14;
+      material.depthWrite = false;
+    });
+    visorMat.transparent = true;
+    visorMat.opacity = 0.22;
+  }
 
   const parts = [
     ["torso", new THREE.BoxGeometry(0.72, 0.98, 0.38), armorMat, [0, 0.95, 0]],
@@ -778,12 +996,35 @@ function spawnBot() {
   rifle.castShadow = true;
   group.add(rifle);
 
+  let visual = null;
+  if (botTexture) {
+    const visualMaterial = new THREE.SpriteMaterial({
+      map: botTexture,
+      color: 0xffffff,
+      transparent: true,
+      alphaTest: 0.04,
+      fog: false,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const visualHeight = 3.8 + Math.random() * 0.3;
+    const visualWidth = botTexture === enemyTextures[2] ? 2.26 : 1.96 + Math.random() * 0.16;
+    visual = new THREE.Sprite(visualMaterial);
+    visual.scale.set(visualWidth, visualHeight, 1);
+    visual.position.set(0, 1.72 + (visualHeight - 3.8) * 0.08, -0.08);
+    visual.userData.hitZone = "torso";
+    visual.renderOrder = 100;
+    group.add(visual);
+    botMeshes.push(visual);
+  }
+
   const spawn = randomSpawnPoint();
   group.position.set(spawn.x, 0, spawn.z);
   scene.add(group);
 
   const bot = {
     group,
+    visual,
     health: selectedMode.botHealth + wave * 8,
     speed: selectedMode.botSpeed + Math.random() * 0.45 + wave * 0.025,
     nextShot: Math.random() * 2,
@@ -793,6 +1034,19 @@ function spawnBot() {
 }
 
 function randomSpawnPoint() {
+  if (bots.length < 3) {
+    const baseX = camera.position.x;
+    const baseZ = camera.position.z;
+    const earlySpawns = [
+      { x: baseX - 3 + Math.random() * 1.2, z: baseZ - 10 - Math.random() * 1.5 },
+      { x: baseX + 3 - Math.random() * 1.2, z: baseZ - 13 - Math.random() * 1.5 },
+      { x: baseX + Math.random() * 2 - 1, z: baseZ - 16 - Math.random() * 1.5 },
+    ];
+    const spawn = earlySpawns[bots.length];
+    spawn.x = Math.max(-34, Math.min(34, spawn.x));
+    spawn.z = Math.max(-34, Math.min(34, spawn.z));
+    return spawn;
+  }
   for (let i = 0; i < 50; i += 1) {
     const x = -34 + Math.random() * 68;
     const z = -34 + Math.random() * 68;

@@ -1,2 +1,4 @@
 node_modules/
 .tools/
+tmp-strike-*.png
+assets/*-chroma.png
