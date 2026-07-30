@@ -6,7 +6,7 @@ const games = [
     category: "puzzle",
     players: "单人",
     href: "#",
-    color: "linear-gradient(135deg, #0f9f7f, #2563eb)",
+    color: "linear-gradient(135deg, #19f5c6, #4ea1ff)",
     description: "第一个示例游戏位。后续可以把入口替换成真正的 HTML5 游戏地址。",
   },
   {
@@ -16,7 +16,7 @@ const games = [
     category: "party",
     players: "多人",
     href: "#",
-    color: "linear-gradient(135deg, #e24a68, #f0b429)",
+    color: "linear-gradient(135deg, #ff5f7e, #ffd166)",
     description: "预留给联机小游戏。上线时可接房间码、邀请链接和排行榜。",
   },
   {
@@ -26,7 +26,7 @@ const games = [
     category: "puzzle",
     players: "单人",
     href: "#",
-    color: "linear-gradient(135deg, #15161a, #6b7c93)",
+    color: "linear-gradient(135deg, #141a2a, #7357ff)",
     description: "适合放轻量益智题、答题闯关或限时挑战。",
   },
   {
@@ -36,7 +36,7 @@ const games = [
     category: "soon",
     players: "待定",
     href: "#",
-    color: "linear-gradient(135deg, #536976, #292e49)",
+    color: "linear-gradient(135deg, #263238, #0f9f7f)",
     description: "你后面每给我一个游戏，我会把这里替换成正式入口。",
   },
 ];
@@ -45,7 +45,27 @@ const grid = document.querySelector("#gameGrid");
 const search = document.querySelector("#gameSearch");
 const filters = document.querySelectorAll(".filter");
 const dialog = document.querySelector("#loginDialog");
+const toast = document.querySelector("#toast");
+const phoneInput = document.querySelector("#phoneInput");
+const codeInput = document.querySelector("#codeInput");
+const sendCodeBtn = document.querySelector("#sendCodeBtn");
+const loginBtn = document.querySelector("#loginBtn");
+const loginHint = document.querySelector("#loginHint");
+const loginChipText = document.querySelector("#loginChipText");
+
 let activeFilter = "all";
+let demoCode = "";
+let cooldown = 0;
+let cooldownTimer = null;
+
+function showToast(message) {
+  toast.textContent = message;
+  toast.classList.add("is-visible");
+  window.clearTimeout(showToast.timer);
+  showToast.timer = window.setTimeout(() => {
+    toast.classList.remove("is-visible");
+  }, 2800);
+}
 
 function renderGames() {
   const query = search.value.trim().toLowerCase();
@@ -77,7 +97,7 @@ function renderGames() {
               <small>${game.href === "#" ? "入口待配置" : "网页即点即玩"}</small>
               ${
                 game.href === "#"
-                  ? `<button type="button" data-open-login>预览</button>`
+                  ? `<button type="button" data-preview="${game.title}">预览</button>`
                   : `<a href="${game.href}">开始</a>`
               }
             </div>
@@ -87,6 +107,76 @@ function renderGames() {
     )
     .join("");
 }
+
+function isValidPhone(value) {
+  return /^1[3-9]\d{9}$/.test(value.trim());
+}
+
+function startCooldown() {
+  cooldown = 60;
+  sendCodeBtn.disabled = true;
+  sendCodeBtn.textContent = `${cooldown}s`;
+  cooldownTimer = window.setInterval(() => {
+    cooldown -= 1;
+    sendCodeBtn.textContent = `${cooldown}s`;
+    if (cooldown <= 0) {
+      window.clearInterval(cooldownTimer);
+      sendCodeBtn.disabled = false;
+      sendCodeBtn.textContent = "获取";
+    }
+  }, 1000);
+}
+
+function updateLoggedIn(phone) {
+  const masked = `${phone.slice(0, 3)}****${phone.slice(7)}`;
+  localStorage.setItem("gameboxUser", masked);
+  loginChipText.textContent = masked;
+  loginHint.textContent = `已作为 ${masked} 登录。`;
+  showToast("登录成功，欢迎进入玩盒！");
+}
+
+sendCodeBtn.addEventListener("click", () => {
+  const phone = phoneInput.value.trim();
+  if (!isValidPhone(phone)) {
+    showToast("请先输入正确的 11 位中国大陆手机号。");
+    phoneInput.focus();
+    return;
+  }
+
+  demoCode = String(Math.floor(100000 + Math.random() * 900000));
+  codeInput.value = demoCode;
+  loginHint.textContent = `演示验证码已自动填入：${demoCode}`;
+  showToast(`演示验证码：${demoCode}`);
+  startCooldown();
+});
+
+loginBtn.addEventListener("click", () => {
+  const phone = phoneInput.value.trim();
+  const code = codeInput.value.trim();
+  if (!isValidPhone(phone)) {
+    showToast("手机号格式不对，请检查一下。");
+    phoneInput.focus();
+    return;
+  }
+  if (!demoCode) {
+    showToast("请先点击“获取”生成演示验证码。");
+    return;
+  }
+  if (code !== demoCode) {
+    showToast("验证码不正确。演示版会自动填入正确验证码。");
+    codeInput.focus();
+    return;
+  }
+  updateLoggedIn(phone);
+});
+
+document.querySelectorAll("[data-social]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const provider = button.dataset.social;
+    showToast(`${provider} 登录需要正式接入开放平台，当前先展示入口。`);
+    dialog.showModal();
+  });
+});
 
 filters.forEach((button) => {
   button.addEventListener("click", () => {
@@ -100,12 +190,18 @@ filters.forEach((button) => {
 search.addEventListener("input", renderGames);
 
 document.addEventListener("click", (event) => {
-  if (event.target.matches("[data-open-login]")) {
+  const loginTarget = event.target.closest("[data-open-login]");
+  const previewTarget = event.target.closest("[data-preview]");
+  if (loginTarget) {
     dialog.showModal();
+  }
+  if (previewTarget) {
+    showToast(`${previewTarget.dataset.preview} 还没有接入游戏文件。把入口地址给我，我来接。`);
   }
 });
 
 document.querySelector("#showAddGuide").addEventListener("click", () => {
+  showToast("新增游戏格式已弹出，复制给我也可以。");
   alert(`新增游戏时，把 script.js 里的 games 数组补一项：
 
 {
@@ -115,9 +211,15 @@ document.querySelector("#showAddGuide").addEventListener("click", () => {
   category: "puzzle",
   players: "单人",
   href: "/games/your-game/index.html",
-  color: "linear-gradient(135deg, #0f9f7f, #2563eb)",
+  color: "linear-gradient(135deg, #19f5c6, #4ea1ff)",
   description: "一句话介绍"
 }`);
 });
+
+const savedUser = localStorage.getItem("gameboxUser");
+if (savedUser) {
+  loginChipText.textContent = savedUser;
+  loginHint.textContent = `已作为 ${savedUser} 登录。`;
+}
 
 renderGames();

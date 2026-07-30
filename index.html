@@ -6,30 +6,31 @@
     <title>玩盒 GameBox</title>
     <meta
       name="description"
-      content="公开在线网页游戏盒，支持中国网络环境的登录入口和可扩展游戏大厅。"
+      content="公开在线网页游戏盒，支持中国网络环境登录入口，可持续添加 HTML5 网页游戏。"
     />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <div class="page-glow" aria-hidden="true"></div>
     <div class="app-shell">
       <header class="topbar">
         <a class="brand" href="#" aria-label="玩盒首页">
           <span class="brand-mark">玩</span>
           <span>
             <strong>玩盒</strong>
-            <small>GameBox</small>
+            <small>GAMEBOX</small>
           </span>
         </a>
 
         <nav class="nav" aria-label="主导航">
-          <a href="#games">游戏</a>
-          <a href="#rank">榜单</a>
+          <a href="#games">游戏库</a>
+          <a href="#rank">热度榜</a>
           <a href="#submit">添加计划</a>
         </nav>
 
         <button class="login-chip" type="button" data-open-login>
           <span class="status-dot"></span>
-          登录 / 注册
+          <span id="loginChipText">登录</span>
         </button>
       </header>
 
@@ -42,16 +43,21 @@
             aria-hidden="true"
           />
           <div class="hero-copy">
-            <p class="eyebrow">公开网页游戏大厅</p>
-            <h1 id="hero-title">一个能慢慢装满小游戏的在线游戏盒</h1>
+            <p class="eyebrow">PUBLIC WEB ARCADE</p>
+            <h1 id="hero-title">把每一个小游戏，收进同一个发光入口</h1>
             <p class="hero-text">
-              先把大厅、登录入口、分类、搜索和游戏位搭好。后续每加一个游戏，只需要补充卡片、入口地址和运行方式。
+              这是玩盒的第一版大厅：登录入口、游戏卡片、搜索筛选和后续扩展结构都已经搭好。你给我一个游戏，我就往这里装一个入口。
             </p>
             <div class="hero-actions">
-              <a class="primary-action" href="#games">浏览游戏位</a>
+              <a class="primary-action" href="#games">进入游戏库</a>
               <button class="secondary-action" type="button" data-open-login>
-                测试登录入口
+                试用登录
               </button>
+            </div>
+            <div class="metrics" aria-label="平台状态">
+              <span><strong>4</strong> 游戏位</span>
+              <span><strong>3</strong> 分类</span>
+              <span><strong>CN</strong> 登录入口</span>
             </div>
           </div>
 
@@ -62,20 +68,34 @@
             </div>
             <label>
               <span>手机号</span>
-              <input inputmode="tel" placeholder="请输入 11 位手机号" maxlength="11" />
+              <input
+                id="phoneInput"
+                inputmode="tel"
+                autocomplete="tel"
+                placeholder="请输入 11 位手机号"
+                maxlength="11"
+              />
             </label>
             <div class="sms-row">
               <label>
                 <span>验证码</span>
-                <input inputmode="numeric" placeholder="6 位验证码" maxlength="6" />
+                <input
+                  id="codeInput"
+                  inputmode="numeric"
+                  placeholder="6 位验证码"
+                  maxlength="6"
+                />
               </label>
-              <button type="button">获取</button>
+              <button id="sendCodeBtn" type="button">获取</button>
             </div>
-            <button class="full-login" type="button">进入游戏盒</button>
+            <button class="full-login" id="loginBtn" type="button">进入游戏盒</button>
             <div class="social-login" aria-label="第三方登录">
-              <button type="button">微信</button>
-              <button type="button">QQ</button>
+              <button type="button" data-social="微信">微信</button>
+              <button type="button" data-social="QQ">QQ</button>
             </div>
+            <p class="login-hint" id="loginHint">
+              当前为静态演示登录。点击获取后会生成本地验证码。
+            </p>
           </aside>
         </section>
 
@@ -95,23 +115,25 @@
 
         <section class="section-head" id="games">
           <div>
-            <p class="eyebrow">Game Slots</p>
-            <h2>游戏列表</h2>
+            <p class="eyebrow">GAME SLOTS</p>
+            <h2>游戏库</h2>
           </div>
-          <button class="ghost-button" type="button" id="showAddGuide">新增游戏格式</button>
+          <button class="ghost-button" type="button" id="showAddGuide">
+            新增游戏格式
+          </button>
         </section>
 
         <section class="game-grid" id="gameGrid" aria-live="polite"></section>
 
         <section class="ops-band" id="submit">
           <div>
-            <p class="eyebrow">下一步</p>
-            <h2>后续添加游戏时保留这三个信息</h2>
+            <p class="eyebrow">NEXT</p>
+            <h2>以后添加游戏，只需要补充入口配置</h2>
           </div>
           <ol>
-            <li>游戏名称、封面色或封面图</li>
+            <li>游戏名称、分类、人数和状态</li>
             <li>入口地址，例如 <code>/games/snake/index.html</code></li>
-            <li>状态：可玩、测试中、筹备中</li>
+            <li>封面色或封面图，后续可替换成真实游戏截图</li>
           </ol>
         </section>
       </main>
@@ -120,17 +142,19 @@
     <dialog class="login-dialog" id="loginDialog">
       <form method="dialog">
         <div class="dialog-head">
-          <strong>登录入口初版</strong>
+          <strong>登录已接入前端反馈</strong>
           <button aria-label="关闭" type="submit">×</button>
         </div>
         <p>
-          这里先做前端界面。真正上线时建议接入手机号短信登录，并按需要增加微信开放平台或 QQ 互联。
+          当前是 GitHub Pages 静态演示版，所以不会真的发送短信。正式上线时需要接短信服务、微信开放平台或 QQ 互联。
         </p>
         <div class="dialog-actions">
           <button value="close" type="submit">知道了</button>
         </div>
       </form>
     </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
     <script src="./script.js"></script>
   </body>
