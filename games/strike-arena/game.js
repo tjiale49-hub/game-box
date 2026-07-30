@@ -57,6 +57,7 @@ let clock;
 let textureLoader;
 let enemyTexture;
 let enemyTextures = [];
+let enemyActionTexture;
 let scenicTexture;
 let weapon;
 let muzzleLight;
@@ -420,8 +421,11 @@ function loadProjectTextures() {
   ].map((src) => textureLoader.load(src, (texture) => {
     texture.needsUpdate = true;
   }));
+  enemyActionTexture = textureLoader.load("../../assets/strike-enemy-action-game.png", (texture) => {
+    texture.needsUpdate = true;
+  });
   enemyTexture = enemyTextures[0];
-  [scenicTexture, ...enemyTextures].forEach((texture) => {
+  [scenicTexture, enemyActionTexture, ...enemyTextures].forEach((texture) => {
     if (colorSpace) texture.colorSpace = colorSpace;
     texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
   });
@@ -784,6 +788,88 @@ function createRock(x, z, scale = 1) {
   scene.add(rock);
 }
 
+function createGrassCluster(x, z, scale = 1) {
+  const color = selectedMap.nature === "snow" ? 0xcbd6d8 : selectedMap.nature === "harbor" ? 0x293f3a : 0x2e4f2f;
+  const mat = new THREE.MeshStandardMaterial({
+    color,
+    roughness: 0.96,
+    metalness: 0,
+    side: THREE.DoubleSide,
+    transparent: true,
+    opacity: selectedMap.nature === "snow" ? 0.62 : 0.88,
+  });
+  const bladeCount = selectedMap.nature === "quarry" ? 4 : 7;
+  for (let i = 0; i < bladeCount; i += 1) {
+    const blade = new THREE.Mesh(new THREE.PlaneGeometry(0.08 * scale, (0.55 + Math.random() * 0.65) * scale), mat);
+    blade.position.set(x + (Math.random() - 0.5) * 0.7 * scale, 0.22 * scale, z + (Math.random() - 0.5) * 0.7 * scale);
+    blade.rotation.y = Math.random() * Math.PI;
+    blade.rotation.z = (Math.random() - 0.5) * 0.42;
+    blade.castShadow = true;
+    scene.add(blade);
+  }
+}
+
+function createBush(x, z, scale = 1) {
+  const bushMat = makeMaterial(selectedMap.nature === "snow" ? 0xc7d0d0 : 0x24442d, 0.94, 0.01);
+  const bush = new THREE.Mesh(new THREE.IcosahedronGeometry(scale, 1), bushMat);
+  bush.position.set(x, scale * 0.55, z);
+  bush.scale.set(1.35, 0.62, 1.05);
+  bush.rotation.set(Math.random() * 0.3, Math.random() * Math.PI, Math.random() * 0.25);
+  bush.castShadow = true;
+  bush.receiveShadow = true;
+  scene.add(bush);
+}
+
+function createGroundWetMark(x, z, sx, sz, opacity = 0.18) {
+  const mark = new THREE.Mesh(
+    new THREE.PlaneGeometry(sx, sz),
+    new THREE.MeshBasicMaterial({
+      color: selectedMap.nature === "snow" ? 0xe4eef1 : 0x06120e,
+      transparent: true,
+      opacity,
+      depthWrite: false,
+    }),
+  );
+  mark.rotation.x = -Math.PI / 2;
+  mark.rotation.z = Math.random() * Math.PI;
+  mark.position.set(x, 0.062, z);
+  scene.add(mark);
+}
+
+function createCanopyShadow(x, z, sx, sz, opacity = 0.12) {
+  const shadow = new THREE.Mesh(
+    new THREE.PlaneGeometry(sx, sz),
+    new THREE.MeshBasicMaterial({
+      color: 0x000000,
+      transparent: true,
+      opacity,
+      depthWrite: false,
+    }),
+  );
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.rotation.z = Math.random() * Math.PI;
+  shadow.position.set(x, 0.066, z);
+  scene.add(shadow);
+}
+
+function createLightRay(x, z, width, height, opacity = 0.08) {
+  const ray = new THREE.Mesh(
+    new THREE.PlaneGeometry(width, height),
+    new THREE.MeshBasicMaterial({
+      color: selectedMap.nature === "snow" ? 0xeaf7ff : 0xd7f0cf,
+      transparent: true,
+      opacity,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  );
+  ray.position.set(x, height * 0.45, z);
+  ray.rotation.y = -0.38 + Math.random() * 0.76;
+  ray.rotation.z = -0.16 + Math.random() * 0.32;
+  ray.renderOrder = -1;
+  scene.add(ray);
+}
+
 function createWaterPatch(x, z, sx, sz) {
   const water = new THREE.Mesh(
     new THREE.PlaneGeometry(sx, sz),
@@ -844,6 +930,32 @@ function createNatureLayer() {
   }
   for (let i = 0; i < 34; i += 1) {
     createRock(-34 + Math.random() * 68, -34 + Math.random() * 68, 0.3 + Math.random() * 0.9);
+  }
+  const grassCount = sparse ? 46 : selectedMap.nature === "snow" ? 64 : 120;
+  for (let i = 0; i < grassCount; i += 1) {
+    const x = -38 + Math.random() * 76;
+    const z = -38 + Math.random() * 76;
+    if (Math.abs(x - camera.position.x) < 3 && Math.abs(z - camera.position.z) < 4) continue;
+    createGrassCluster(x, z, 0.65 + Math.random() * 1.1);
+  }
+  const bushCount = sparse ? 8 : selectedMap.nature === "snow" ? 10 : 24;
+  for (let i = 0; i < bushCount; i += 1) {
+    createBush(-36 + Math.random() * 72, -36 + Math.random() * 72, 0.38 + Math.random() * 0.72);
+  }
+  for (let i = 0; i < 18; i += 1) {
+    createGroundWetMark(
+      -34 + Math.random() * 68,
+      -34 + Math.random() * 68,
+      2.2 + Math.random() * 6.4,
+      0.7 + Math.random() * 2.3,
+      selectedMap.nature === "snow" ? 0.12 : 0.16,
+    );
+  }
+  for (let i = 0; i < 16; i += 1) {
+    createCanopyShadow(-36 + Math.random() * 72, -36 + Math.random() * 72, 4 + Math.random() * 11, 1.2 + Math.random() * 4, sparse ? 0.08 : 0.13);
+  }
+  for (let i = 0; i < (sparse ? 4 : 8); i += 1) {
+    createLightRay(-30 + Math.random() * 60, -28 + Math.random() * 48, 2.2 + Math.random() * 4.5, 7 + Math.random() * 8, sparse ? 0.045 : 0.075);
   }
   if (selectedMap.nature === "coast") {
     createWaterPatch(28, 0, 24, 86);
@@ -935,6 +1047,8 @@ function spawnBot() {
   });
   const visorMat = new THREE.MeshBasicMaterial({ color: selectedMap.glow });
   const botTexture = enemyTextures.length ? enemyTextures[Math.floor(Math.random() * enemyTextures.length)] : enemyTexture;
+  const idleTexture = botTexture;
+  const actionTexture = enemyActionTexture || botTexture;
   if (botTexture) {
     [armorMat, clothMat, skinMat].forEach((material) => {
       material.transparent = true;
@@ -999,7 +1113,7 @@ function spawnBot() {
   let visual = null;
   if (botTexture) {
     const visualMaterial = new THREE.SpriteMaterial({
-      map: botTexture,
+      map: idleTexture,
       color: 0xffffff,
       transparent: true,
       alphaTest: 0.04,
@@ -1025,6 +1139,12 @@ function spawnBot() {
   const bot = {
     group,
     visual,
+    visualMaterial: visual?.material || null,
+    idleTexture,
+    actionTexture,
+    visualBaseScale: visual ? visual.scale.clone() : null,
+    hitReact: 0,
+    lastDistance: 999,
     health: selectedMode.botHealth + wave * 8,
     speed: selectedMode.botSpeed + Math.random() * 0.45 + wave * 0.025,
     nextShot: Math.random() * 2,
@@ -1104,6 +1224,7 @@ function shoot() {
       shotsHit += 1;
       const critical = mesh.userData.hitZone === "head" || hits[0].point.y - bot.group.position.y > 1.34;
       bot.health -= critical ? selectedWeapon.critical : selectedWeapon.damage;
+      bot.hitReact = critical ? 1 : 0.65;
       spawnTracer(hits[0].point, critical ? 0xffd166 : selectedWeapon.tracer);
       spawnImpact(hits[0].point, critical ? 0xffd166 : selectedMap.glow);
       showHitmarker();
@@ -1268,7 +1389,32 @@ function updateBots(delta) {
       bot.group.position.copy(next);
     }
     bot.group.lookAt(camera.position.x, bot.group.position.y, camera.position.z);
-    bot.group.position.y = Math.sin(gameTime * 5.5 + bot.speed) * 0.025;
+    const movingAmount = desired.lengthSq() > 0 ? 1 : 0;
+    const step = Math.sin(gameTime * (8.5 + bot.speed * 1.3) + bot.speed * 3);
+    bot.group.position.y = Math.abs(step) * 0.045 * movingAmount;
+    bot.group.rotation.z = step * 0.035 * movingAmount;
+    if (bot.visual && bot.visualBaseScale) {
+      const aiming = distance < 24;
+      if (bot.visualMaterial && bot.actionTexture && bot.idleTexture) {
+        const nextTexture = aiming || movingAmount ? bot.actionTexture : bot.idleTexture;
+        if (bot.visualMaterial.map !== nextTexture) {
+          bot.visualMaterial.map = nextTexture;
+          bot.visualMaterial.needsUpdate = true;
+        }
+      }
+      const breathe = 1 + Math.sin(gameTime * 2.2 + bot.speed) * 0.018;
+      const stride = 1 + Math.abs(step) * 0.035 * movingAmount;
+      bot.hitReact = Math.max(0, bot.hitReact - delta * 5);
+      const recoil = bot.hitReact * 0.18;
+      bot.visual.scale.set(
+        bot.visualBaseScale.x * (breathe + recoil * 0.2),
+        bot.visualBaseScale.y * stride * (1 - recoil * 0.05),
+        1,
+      );
+      bot.visual.position.x = step * 0.09 * movingAmount;
+      bot.visual.position.y = 1.72 + Math.abs(step) * 0.09 * movingAmount + recoil;
+      bot.visual.material.opacity = 0.98 - bot.hitReact * 0.28;
+    }
 
     bot.nextShot -= delta;
     if (distance < 24 && bot.nextShot <= 0 && !lineBlocked(bot.group.position.clone().add(new THREE.Vector3(0, 1.35, 0)), camera.position)) {
