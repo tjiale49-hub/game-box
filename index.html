@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>玩盒 GameBox</title>
+    <meta
+      name="description"
+      content="公开在线网页游戏盒，支持中国网络环境的登录入口和可扩展游戏大厅。"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="#" aria-label="玩盒首页">
+          <span class="brand-mark">玩</span>
+          <span>
+            <strong>玩盒</strong>
+            <small>GameBox</small>
+          </span>
+        </a>
+
+        <nav class="nav" aria-label="主导航">
+          <a href="#games">游戏</a>
+          <a href="#rank">榜单</a>
+          <a href="#submit">添加计划</a>
+        </nav>
+
+        <button class="login-chip" type="button" data-open-login>
+          <span class="status-dot"></span>
+          登录 / 注册
+        </button>
+      </header>
+
+      <main>
+        <section class="hero" aria-labelledby="hero-title">
+          <img
+            class="hero-bg"
+            src="./assets/hero-game-lobby.png"
+            alt=""
+            aria-hidden="true"
+          />
+          <div class="hero-copy">
+            <p class="eyebrow">公开网页游戏大厅</p>
+            <h1 id="hero-title">一个能慢慢装满小游戏的在线游戏盒</h1>
+            <p class="hero-text">
+              先把大厅、登录入口、分类、搜索和游戏位搭好。后续每加一个游戏，只需要补充卡片、入口地址和运行方式。
+            </p>
+            <div class="hero-actions">
+              <a class="primary-action" href="#games">浏览游戏位</a>
+              <button class="secondary-action" type="button" data-open-login>
+                测试登录入口
+              </button>
+            </div>
+          </div>
+
+          <aside class="login-panel" aria-label="登录面板">
+            <div class="panel-head">
+              <span>中国网络可用登录</span>
+              <strong>手机号优先</strong>
+            </div>
+            <label>
+              <span>手机号</span>
+              <input inputmode="tel" placeholder="请输入 11 位手机号" maxlength="11" />
+            </label>
+            <div class="sms-row">
+              <label>
+                <span>验证码</span>
+                <input inputmode="numeric" placeholder="6 位验证码" maxlength="6" />
+              </label>
+              <button type="button">获取</button>
+            </div>
+            <button class="full-login" type="button">进入游戏盒</button>
+            <div class="social-login" aria-label="第三方登录">
+              <button type="button">微信</button>
+              <button type="button">QQ</button>
+            </div>
+          </aside>
+        </section>
+
+        <section class="toolbar" aria-label="游戏筛选工具">
+          <div class="search-wrap">
+            <span aria-hidden="true">⌕</span>
+            <input id="gameSearch" type="search" placeholder="搜索游戏、标签、状态" />
+          </div>
+          <div class="filters" role="group" aria-label="分类筛选">
+            <button class="filter is-active" type="button" data-filter="all">全部</button>
+            <button class="filter" type="button" data-filter="ready">可玩</button>
+            <button class="filter" type="button" data-filter="party">多人</button>
+            <button class="filter" type="button" data-filter="puzzle">益智</button>
+            <button class="filter" type="button" data-filter="soon">筹备中</button>
+          </div>
+        </section>
+
+        <section class="section-head" id="games">
+          <div>
+            <p class="eyebrow">Game Slots</p>
+            <h2>游戏列表</h2>
+          </div>
+          <button class="ghost-button" type="button" id="showAddGuide">新增游戏格式</button>
+        </section>
+
+        <section class="game-grid" id="gameGrid" aria-live="polite"></section>
+
+        <section class="ops-band" id="submit">
+          <div>
+            <p class="eyebrow">下一步</p>
+            <h2>后续添加游戏时保留这三个信息</h2>
+          </div>
+          <ol>
+            <li>游戏名称、封面色或封面图</li>
+            <li>入口地址，例如 <code>/games/snake/index.html</code></li>
+            <li>状态：可玩、测试中、筹备中</li>
+          </ol>
+        </section>
+      </main>
+    </div>
+
+    <dialog class="login-dialog" id="loginDialog">
+      <form method="dialog">
+        <div class="dialog-head">
+          <strong>登录入口初版</strong>
+          <button aria-label="关闭" type="submit">×</button>
+        </div>
+        <p>
+          这里先做前端界面。真正上线时建议接入手机号短信登录，并按需要增加微信开放平台或 QQ 互联。
+        </p>
+        <div class="dialog-actions">
+          <button value="close" type="submit">知道了</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="./script.js"></script>
+  </body>
+</html>
