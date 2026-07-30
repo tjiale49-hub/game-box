@@ -1,0 +1,18 @@
+{
+  "name": "game-box",
+  "version": "1.0.0",
+  "description": "Static public web game box with Strike Arena FPS prototype.",
+  "private": true,
+  "scripts": {
+    "remotion": "remotion studio",
+    "remotion:render": "remotion render"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED",
+  "type": "module",
+  "dependencies": {
+    "@remotion/cli": "4.0.502",
+    "remotion": "4.0.502"
+  }
+}

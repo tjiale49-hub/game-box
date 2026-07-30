@@ -452,6 +452,262 @@ a {
   line-height: 2;
 }
 
+.site-refresh {
+  background:
+    radial-gradient(circle at 72% 12%, rgba(214, 129, 55, 0.18), transparent 28%),
+    radial-gradient(circle at 18% 0%, rgba(49, 84, 58, 0.28), transparent 34%),
+    linear-gradient(135deg, #070806, #10130e 54%, #050607);
+}
+
+.premium-home {
+  max-width: 1560px;
+  margin: 0 auto;
+}
+
+.premium-nav {
+  position: sticky;
+  top: 12px;
+  z-index: 10;
+  padding: 8px 0;
+}
+
+.cinematic-hero {
+  position: relative;
+  min-height: min(760px, calc(100vh - 104px));
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 250px;
+  align-items: end;
+  gap: 24px;
+  margin-top: 22px;
+  padding: clamp(26px, 5vw, 68px);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, rgba(3, 5, 4, 0.96), rgba(3, 5, 4, 0.7) 42%, rgba(3, 5, 4, 0.18) 74%, rgba(3, 5, 4, 0.46)),
+    url("../../assets/strike-arena-hero.png") center / cover,
+    linear-gradient(140deg, rgba(34, 54, 36, 0.9), rgba(88, 54, 28, 0.55));
+  box-shadow: 0 40px 120px rgba(0, 0, 0, 0.5);
+}
+
+.terrain-backdrop {
+  position: absolute;
+  inset: 0;
+  opacity: 0.38;
+}
+
+.ridge {
+  position: absolute;
+  left: -6%;
+  right: -6%;
+  bottom: 0;
+  display: block;
+  height: 44%;
+  clip-path: polygon(0 54%, 8% 44%, 18% 60%, 29% 34%, 41% 55%, 56% 28%, 70% 50%, 84% 30%, 100% 48%, 100% 100%, 0 100%);
+}
+
+.ridge-one {
+  background: linear-gradient(180deg, rgba(45, 71, 48, 0.65), rgba(7, 9, 8, 0.98));
+}
+
+.ridge-two {
+  bottom: 10%;
+  height: 36%;
+  opacity: 0.48;
+  background: linear-gradient(180deg, rgba(126, 113, 85, 0.42), rgba(15, 18, 15, 0.92));
+  transform: scaleX(1.1);
+}
+
+.mist {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: block;
+  height: 22%;
+  background: linear-gradient(90deg, transparent, rgba(215, 222, 205, 0.18), transparent);
+  filter: blur(18px);
+}
+
+.mist-one {
+  bottom: 24%;
+}
+
+.mist-two {
+  bottom: 8%;
+  opacity: 0.8;
+}
+
+.hero-operator {
+  position: absolute;
+  right: 12%;
+  bottom: -2%;
+  width: 240px;
+  height: 510px;
+  background:
+    radial-gradient(circle at 50% 9%, #6b5d4f 0 7%, transparent 7.5%),
+    linear-gradient(90deg, transparent 0 22%, #151916 22% 36%, transparent 36% 64%, #151916 64% 78%, transparent 78%),
+    linear-gradient(90deg, transparent 0 14%, #252c26 14% 44%, #0d100e 44% 56%, #252c26 56% 86%, transparent 86%),
+    linear-gradient(90deg, transparent 0 30%, #1c211d 30% 70%, transparent 70%);
+  filter: drop-shadow(0 30px 50px rgba(0, 0, 0, 0.68));
+  opacity: 0.16;
+}
+
+.hero-operator::before {
+  position: absolute;
+  left: -22%;
+  top: 35%;
+  width: 122%;
+  height: 26px;
+  content: "";
+  border-radius: 6px;
+  background: linear-gradient(90deg, #090a09, #29312c);
+  transform: rotate(-12deg);
+}
+
+.cinematic-copy {
+  position: relative;
+  z-index: 1;
+  max-width: 720px;
+}
+
+.cinematic-copy h1 {
+  max-width: 720px;
+  font-size: clamp(42px, 5.4vw, 76px);
+  line-height: 1.02;
+}
+
+.cinematic-copy p:not(.eyebrow) {
+  max-width: 680px;
+  color: #d6ddd4;
+  font-size: 17px;
+}
+
+.intel-strip {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 10px;
+  align-self: end;
+}
+
+.intel-strip span {
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(4, 6, 5, 0.62);
+  color: #c8d0c6;
+}
+
+.intel-strip b {
+  display: block;
+  color: var(--gold);
+  font-size: 22px;
+}
+
+.cinematic-map-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(210px, 1fr));
+  gap: 14px;
+}
+
+.scene-card {
+  position: relative;
+  min-height: 360px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 10px;
+  overflow: hidden;
+  padding: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  color: white;
+  text-decoration: none;
+  background: #111;
+}
+
+.scene-card::before,
+.scene-card::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+}
+
+.scene-card::before {
+  opacity: 0.96;
+}
+
+.scene-card::after {
+  background: linear-gradient(180deg, transparent 12%, rgba(0, 0, 0, 0.18) 45%, rgba(0, 0, 0, 0.86));
+}
+
+.scene-card span,
+.scene-card strong,
+.scene-card small {
+  position: relative;
+  z-index: 1;
+}
+
+.scene-card span {
+  color: var(--gold);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.scene-card strong {
+  font-size: 32px;
+}
+
+.scene-card small {
+  color: #dce4d7;
+  line-height: 1.6;
+}
+
+.scene-card.rainforest::before {
+  background:
+    radial-gradient(circle at 20% 20%, rgba(108, 178, 91, 0.45), transparent 22%),
+    linear-gradient(140deg, #102414, #34533b 58%, #152016);
+}
+
+.scene-card.alpine::before {
+  background:
+    radial-gradient(circle at 70% 15%, rgba(255, 255, 255, 0.5), transparent 18%),
+    linear-gradient(140deg, #1b2b34, #879aa2 56%, #1a2329);
+}
+
+.scene-card.coast::before {
+  background:
+    radial-gradient(circle at 70% 66%, rgba(77, 192, 195, 0.45), transparent 26%),
+    linear-gradient(140deg, #13252b, #58604f 55%, #183943);
+}
+
+.scene-card.wetlands::before {
+  background:
+    radial-gradient(circle at 35% 68%, rgba(131, 151, 82, 0.4), transparent 24%),
+    linear-gradient(140deg, #172016, #4f573a 56%, #202018);
+}
+
+.operator-band {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 24px;
+  align-items: center;
+  margin-top: 34px;
+  padding: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(255, 209, 102, 0.1), rgba(49, 84, 58, 0.28));
+}
+
+.operator-band h2 {
+  margin: 0 0 8px;
+  font-size: clamp(30px, 4vw, 52px);
+}
+
+.premium-modes {
+  grid-template-columns: repeat(4, minmax(210px, 1fr));
+}
+
 .game-root,
 #gameCanvas {
   width: 100vw;
@@ -1077,8 +1333,28 @@ p {
   }
 
   .status-board,
-  .mode-grid {
+  .mode-grid,
+  .cinematic-map-grid,
+  .premium-modes {
     grid-template-columns: 1fr;
+  }
+
+  .cinematic-hero,
+  .operator-band {
+    grid-template-columns: 1fr;
+  }
+
+  .cinematic-copy h1 {
+    font-size: clamp(44px, 16vw, 70px);
+  }
+
+  .intel-strip {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .hero-operator {
+    opacity: 0.28;
+    right: -10%;
   }
 
   .control-grid {

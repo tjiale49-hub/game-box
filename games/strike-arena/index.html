@@ -3,133 +3,127 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>高能突击 - 模式大厅</title>
+    <title>高能突击 - 自然战区</title>
     <meta
       name="description"
-      content="高能突击网页 FPS 模式大厅，选择团队竞技、爆破、狙击训练、生存突围和 BOT 训练后进入独立对局页。"
+      content="高能突击网页 FPS 官网首页，包含自然场景地图、真实人物风格、模式大厅和独立对局入口。"
     />
     <link rel="stylesheet" href="./styles.css" />
   </head>
-  <body class="lobby-body">
-    <main class="strike-lobby">
-      <header class="lobby-topbar">
+  <body class="lobby-body site-refresh">
+    <main class="strike-lobby premium-home">
+      <header class="lobby-topbar premium-nav">
         <a class="lobby-brand" href="../../index.html">
           <span>SA</span>
-          <strong>高能突击</strong>
+          <strong>Strike Arena</strong>
         </a>
         <nav aria-label="游戏功能">
           <a href="#modes">模式</a>
-          <a href="#arsenal">军备库</a>
-          <a href="#maps">地图</a>
+          <a href="#maps">自然地图</a>
+          <a href="#operators">干员</a>
           <a href="#season">任务</a>
         </nav>
         <a class="lobby-login" href="../../index.html">返回玩盒</a>
       </header>
 
-      <section class="lobby-hero">
-        <div class="hero-visual" aria-hidden="true">
-          <div class="operator-silhouette">
-            <span class="operator-head"></span>
-            <span class="operator-body"></span>
-            <span class="operator-rifle"></span>
-          </div>
-          <div class="weapon-silhouette"></div>
-          <div class="scope-ring"></div>
-          <div class="scan-line"></div>
+      <section class="cinematic-hero">
+        <div class="terrain-backdrop" aria-hidden="true">
+          <span class="ridge ridge-one"></span>
+          <span class="ridge ridge-two"></span>
+          <span class="mist mist-one"></span>
+          <span class="mist mist-two"></span>
+          <span class="hero-operator"></span>
         </div>
-        <div class="hero-info">
-          <p class="eyebrow">REALISTIC WEB FPS PROTOTYPE</p>
-          <h1>从模式大厅进入独立战区</h1>
+        <div class="cinematic-copy">
+          <p class="eyebrow">CINEMATIC WEB FPS</p>
+          <h1>自然战区，真实干员，进入下一场突击。</h1>
           <p>
-            这一版把入口拆成真正的射击游戏层级：大厅、模式、地图、军备库、任务和独立对局页。浏览器版本不能等同 UE5 大作，但已经按写实 FPS 的产品结构往前推进。
+            参考 MotionSites 高级动效首页的电影感结构，重做为原创 FPS 官网首屏：大场景、强对比、战术数据、自然地图卡和独立对局入口。
           </p>
           <div class="hero-actions">
-            <a class="primary-start" href="./play.html?mode=deathmatch&map=warehouse&weapon=carbine">
-              快速匹配
+            <a class="primary-start" href="./play.html?mode=deathmatch&map=rainforest&weapon=carbine">
+              立即开战
             </a>
-            <a class="secondary-start" href="./play.html?mode=training&map=desert&weapon=carbine">
-              进入训练
-            </a>
+            <a class="secondary-start" href="#maps">选择地图</a>
           </div>
         </div>
-        <aside class="status-board">
-          <span><strong>5</strong> 模式</span>
-          <span><strong>4</strong> 地图</span>
-          <span><strong>3</strong> 武器</span>
-          <span><strong>BOT</strong> 对抗</span>
+        <aside class="intel-strip">
+          <span><b>8</b> 地图</span>
+          <span><b>4</b> 自然战区</span>
+          <span><b>真实人形</b> 敌人</span>
+          <span><b>Remotion</b> 已接入</span>
         </aside>
+      </section>
+
+      <section class="lobby-section" id="maps">
+        <div class="section-title">
+          <p class="eyebrow">NATURAL BATTLEFIELDS</p>
+          <h2>真实自然场景地图</h2>
+        </div>
+        <div class="cinematic-map-grid">
+          <a class="scene-card rainforest" href="./play.html?mode=deathmatch&map=rainforest&weapon=carbine">
+            <span>RAINFOREST VALLEY</span>
+            <strong>雨林溪谷</strong>
+            <small>树冠、溪流、湿滑岩石和短兵交火路线</small>
+          </a>
+          <a class="scene-card alpine" href="./play.html?mode=sniper&map=alpine&weapon=sniper">
+            <span>ALPINE OUTPOST</span>
+            <strong>雪山哨站</strong>
+            <small>雪松、岩脊、远距离视线和狙击训练</small>
+          </a>
+          <a class="scene-card coast" href="./play.html?mode=survival&map=coast&weapon=carbine">
+            <span>COASTAL CLIFF</span>
+            <strong>海岸断崖</strong>
+            <small>浅水、断崖防线、潮湿地面和侧翼推进</small>
+          </a>
+          <a class="scene-card wetlands" href="./play.html?mode=demolition&map=wetlands&weapon=smg">
+            <span>WETLAND VILLAGE</span>
+            <strong>湿地村落</strong>
+            <small>水塘、木箱、植被遮挡和爆破点争夺</small>
+          </a>
+        </div>
       </section>
 
       <section class="lobby-section" id="modes">
         <div class="section-title">
           <p class="eyebrow">MODE SELECT</p>
-          <h2>选择模式</h2>
+          <h2>作战模式</h2>
         </div>
-        <div class="mode-grid">
+        <div class="mode-grid premium-modes">
           <article class="mode-card is-featured">
             <span>TEAM DEATHMATCH</span>
             <h3>团队竞技</h3>
-            <p>高频交火、快速复活、目标 30 击破，适合测试压枪和转点。</p>
-            <a href="./play.html?mode=deathmatch&map=warehouse&weapon=carbine">进入</a>
+            <p>高频交火、快速复活、目标 30 击破。</p>
+            <a href="./play.html?mode=deathmatch&map=rainforest&weapon=carbine">进入</a>
           </article>
           <article class="mode-card">
             <span>DEMOLITION</span>
             <h3>爆破模拟</h3>
-            <p>围绕目标点推进，BOT 会压近点位，模拟攻防节奏。</p>
-            <a href="./play.html?mode=demolition&map=night&weapon=smg">进入</a>
+            <p>围绕自然掩体推进，守住目标点。</p>
+            <a href="./play.html?mode=demolition&map=wetlands&weapon=smg">进入</a>
           </article>
           <article class="mode-card">
             <span>SURVIVAL</span>
             <h3>生存突围</h3>
-            <p>低补给、高压力、连续波次，强调保持血量和弹药管理。</p>
-            <a href="./play.html?mode=survival&map=desert&weapon=carbine">进入</a>
+            <p>低补给、高压力、连续波次。</p>
+            <a href="./play.html?mode=survival&map=coast&weapon=carbine">进入</a>
           </article>
           <article class="mode-card">
             <span>SNIPER</span>
             <h3>狙击训练</h3>
-            <p>低射速高伤害，远距离目标优先，练习单发命中。</p>
-            <a href="./play.html?mode=sniper&map=range&weapon=sniper">进入</a>
-          </article>
-          <article class="mode-card">
-            <span>BOT TRAINING</span>
-            <h3>BOT 训练</h3>
-            <p>基础移动 BOT 训练，适合先熟悉鼠标锁定和射击手感。</p>
-            <a href="./play.html?mode=training&map=desert&weapon=carbine">进入</a>
+            <p>雪山远距线路，练习单发命中。</p>
+            <a href="./play.html?mode=sniper&map=alpine&weapon=sniper">进入</a>
           </article>
         </div>
       </section>
 
-      <section class="lobby-columns">
-        <div class="lobby-section" id="arsenal">
-          <div class="section-title">
-            <p class="eyebrow">ARSENAL</p>
-            <h2>军备库</h2>
-          </div>
-          <div class="arsenal-list">
-            <a href="./play.html?mode=deathmatch&map=warehouse&weapon=carbine">
-              <strong>VX-9 Carbine</strong><span>稳定突击步枪，适合中距离压枪</span>
-            </a>
-            <a href="./play.html?mode=demolition&map=night&weapon=smg">
-              <strong>K-Vector SMG</strong><span>近距离高射速，移动扩散更明显</span>
-            </a>
-            <a href="./play.html?mode=sniper&map=range&weapon=sniper">
-              <strong>M-700 Marksman</strong><span>高伤单发，换弹慢，适合狙击训练</span>
-            </a>
-          </div>
+      <section class="operator-band" id="operators">
+        <div>
+          <p class="eyebrow">OPERATORS</p>
+          <h2>真实人形干员已上线</h2>
+          <p>对局中的敌人不再是胶囊体，而是由头盔、面罩、防弹衣、手臂、手部、腿部、靴子、背包和武器组成的人形角色。</p>
         </div>
-
-        <div class="lobby-section" id="maps">
-          <div class="section-title">
-            <p class="eyebrow">MAPS</p>
-            <h2>地图池</h2>
-          </div>
-          <div class="map-list">
-            <span>沙漠仓库 · 开阔训练场</span>
-            <span>集装箱仓库 · 团队竞技动线</span>
-            <span>夜间工厂 · 近距离攻防</span>
-            <span>远距靶场 · 狙击路线</span>
-          </div>
-        </div>
+        <a class="primary-start" href="./play.html?mode=deathmatch&map=rainforest&weapon=carbine">查看对局</a>
       </section>
 
       <section class="mission-band" id="season">
@@ -138,9 +132,9 @@
           <h2>今日任务</h2>
         </div>
         <ol>
-          <li>任意模式击破 15 个 BOT</li>
-          <li>团队竞技完成 3 次连击</li>
-          <li>狙击训练保持 70% 以上血量</li>
+          <li>雨林溪谷击破 15 名敌方步兵</li>
+          <li>雪山哨站完成 3 次精准命中</li>
+          <li>海岸断崖保持 70% 以上血量撤离</li>
         </ol>
       </section>
     </main>

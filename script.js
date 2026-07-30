@@ -7,7 +7,7 @@ const games = [
     players: "单人",
     href: "./games/strike-arena/",
     color: "linear-gradient(135deg, #18f5ff, #ff4567)",
-    description: "网页 3D FPS 原型：独立大厅、多模式入口、地图选择、武器参数、BOT 对抗和写实 HUD。",
+    description: "网页 3D FPS 原型：电影感官网首页、自然场景地图、真实人形敌人、多模式入口和写实 HUD。",
   },
   {
     title: "霓虹贪吃蛇",

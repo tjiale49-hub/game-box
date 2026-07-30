@@ -202,6 +202,50 @@ const MAPS = {
     glow: 0xffd166,
     spawn: [0, player.height, 26],
   },
+  rainforest: {
+    name: "雨林溪谷",
+    sky: 0x0b1410,
+    fog: 0x102018,
+    ground: 0x2f3b28,
+    concrete: 0x3d473c,
+    accent: 0x31543a,
+    glow: 0x66d17a,
+    spawn: [-6, player.height, 24],
+    nature: "forest",
+  },
+  alpine: {
+    name: "雪山哨站",
+    sky: 0x101923,
+    fog: 0xb6c2c8,
+    ground: 0x87939a,
+    concrete: 0x566067,
+    accent: 0xd7e2e8,
+    glow: 0xcce9ff,
+    spawn: [8, player.height, 26],
+    nature: "snow",
+  },
+  coast: {
+    name: "海岸断崖",
+    sky: 0x0c1a21,
+    fog: 0x17313a,
+    ground: 0x4d4839,
+    concrete: 0x4f5652,
+    accent: 0x2b6f79,
+    glow: 0x54d6d6,
+    spawn: [-10, player.height, 22],
+    nature: "coast",
+  },
+  wetlands: {
+    name: "湿地村落",
+    sky: 0x0b110e,
+    fog: 0x17221a,
+    ground: 0x39422f,
+    concrete: 0x4b4538,
+    accent: 0x5b6b45,
+    glow: 0xb8d66b,
+    spawn: [10, player.height, 20],
+    nature: "wetlands",
+  },
 };
 
 const WEAPONS = {
@@ -539,6 +583,79 @@ function createArenaProps() {
   );
   objective.position.set(0, 0.1, 0);
   scene.add(objective);
+  createNatureLayer();
+}
+
+function createTree(x, z, scale = 1, snowy = false) {
+  const trunk = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.18 * scale, 0.28 * scale, 2.2 * scale, 10),
+    makeMaterial(0x4a3524, 0.86, 0.02),
+  );
+  trunk.position.set(x, 1.1 * scale, z);
+  trunk.castShadow = true;
+  scene.add(trunk);
+  const leafColor = snowy ? 0xd8e6e8 : selectedMap.nature === "wetlands" ? 0x40552e : 0x234529;
+  for (let i = 0; i < 3; i += 1) {
+    const crown = new THREE.Mesh(
+      new THREE.ConeGeometry((1.05 - i * 0.18) * scale, 1.8 * scale, 9),
+      makeMaterial(leafColor, 0.9, 0.01),
+    );
+    crown.position.set(x, (2.15 + i * 0.76) * scale, z);
+    crown.castShadow = true;
+    scene.add(crown);
+  }
+}
+
+function createRock(x, z, scale = 1) {
+  const rock = new THREE.Mesh(
+    new THREE.DodecahedronGeometry(scale, 0),
+    makeMaterial(selectedMap.nature === "snow" ? 0xaeb8bd : 0x56524a, 0.94, 0.02),
+  );
+  rock.position.set(x, scale * 0.42, z);
+  rock.scale.y = 0.56;
+  rock.rotation.set(Math.random(), Math.random(), Math.random());
+  rock.castShadow = true;
+  rock.receiveShadow = true;
+  scene.add(rock);
+}
+
+function createWaterPatch(x, z, sx, sz) {
+  const water = new THREE.Mesh(
+    new THREE.PlaneGeometry(sx, sz),
+    new THREE.MeshStandardMaterial({
+      color: selectedMap.nature === "coast" ? 0x123d49 : 0x1f3f35,
+      roughness: 0.18,
+      metalness: 0.2,
+      transparent: true,
+      opacity: 0.72,
+    }),
+  );
+  water.rotation.x = -Math.PI / 2;
+  water.position.set(x, 0.045, z);
+  scene.add(water);
+}
+
+function createNatureLayer() {
+  if (!selectedMap.nature) return;
+  const snowy = selectedMap.nature === "snow";
+  const treeCount = selectedMap.nature === "coast" ? 12 : selectedMap.nature === "snow" ? 18 : 30;
+  for (let i = 0; i < treeCount; i += 1) {
+    const edge = Math.random() > 0.5;
+    const x = edge ? (Math.random() > 0.5 ? 35 : -35) + Math.random() * 5 - 2.5 : -34 + Math.random() * 68;
+    const z = edge ? -34 + Math.random() * 68 : (Math.random() > 0.5 ? 35 : -35) + Math.random() * 5 - 2.5;
+    createTree(x, z, 0.75 + Math.random() * 0.65, snowy);
+  }
+  for (let i = 0; i < 26; i += 1) {
+    createRock(-34 + Math.random() * 68, -34 + Math.random() * 68, 0.3 + Math.random() * 0.9);
+  }
+  if (selectedMap.nature === "coast") {
+    createWaterPatch(28, 0, 24, 86);
+    addBox([11, 0.18, 0, 1.2, 0.36, 86], makeMaterial(0x777064, 0.88, 0.03), true);
+  }
+  if (selectedMap.nature === "wetlands" || selectedMap.nature === "forest") {
+    createWaterPatch(-18, -6, 7, 52);
+    createWaterPatch(22, 18, 8, 28);
+  }
 }
 
 function createWeapon() {
@@ -618,6 +735,10 @@ function spawnBot() {
     ["rightArm", new THREE.CapsuleGeometry(0.11, 0.54, 5, 10), clothMat, [0.48, 0.94, 0]],
     ["leftLeg", new THREE.CapsuleGeometry(0.13, 0.66, 5, 10), clothMat, [-0.18, 0.32, 0]],
     ["rightLeg", new THREE.CapsuleGeometry(0.13, 0.66, 5, 10), clothMat, [0.18, 0.32, 0]],
+    ["leftHand", new THREE.SphereGeometry(0.09, 12, 8), skinMat, [-0.55, 0.63, -0.16]],
+    ["rightHand", new THREE.SphereGeometry(0.09, 12, 8), skinMat, [0.55, 0.63, -0.16]],
+    ["leftBoot", new THREE.BoxGeometry(0.22, 0.12, 0.34), armorMat, [-0.18, 0.02, -0.05]],
+    ["rightBoot", new THREE.BoxGeometry(0.22, 0.12, 0.34), armorMat, [0.18, 0.02, -0.05]],
   ];
 
   parts.forEach(([zone, geometry, material, position]) => {
@@ -640,6 +761,16 @@ function spawnBot() {
   const visor = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.06, 0.035), visorMat);
   visor.position.set(0, 1.57, -0.24);
   group.add(visor);
+
+  const backpack = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.72, 0.22), armorMat);
+  backpack.position.set(0, 0.96, 0.31);
+  backpack.castShadow = true;
+  group.add(backpack);
+
+  const faceMask = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.18, 0.04), armorMat);
+  faceMask.position.set(0, 1.47, -0.24);
+  faceMask.castShadow = true;
+  group.add(faceMask);
 
   const rifle = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.08, 0.1), armorMat);
   rifle.position.set(0.26, 0.96, -0.38);
