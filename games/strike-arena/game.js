@@ -58,6 +58,9 @@ let textureLoader;
 let enemyTexture;
 let enemyTextures = [];
 let enemyActionTexture;
+let enemyFrames = {};
+let sceneVideo;
+let sceneVideoTexture;
 let scenicTexture;
 let weapon;
 let muzzleLight;
@@ -413,19 +416,40 @@ function makeMaterial(color, roughness = 0.55, metalness = 0.08) {
 function loadProjectTextures() {
   textureLoader = new THREE.TextureLoader();
   const colorSpace = THREE.SRGBColorSpace || THREE.LinearSRGBColorSpace;
+  const loadTexture = (src) => textureLoader.load(src, (texture) => {
+    texture.needsUpdate = true;
+  });
   scenicTexture = textureLoader.load("../../assets/strike-arena-hero.png");
   enemyTextures = [
     "../../assets/strike-enemy-operator-game.png",
     "../../assets/strike-enemy-scout-game.png",
     "../../assets/strike-enemy-heavy-game.png",
-  ].map((src) => textureLoader.load(src, (texture) => {
-    texture.needsUpdate = true;
-  }));
-  enemyActionTexture = textureLoader.load("../../assets/strike-enemy-action-game.png", (texture) => {
-    texture.needsUpdate = true;
-  });
+  ].map(loadTexture);
+  enemyFrames = {
+    idle: enemyTextures,
+    walk: [
+      loadTexture("../../assets/strike-enemy-walk-a-game.png"),
+      loadTexture("../../assets/strike-enemy-walk-b-game.png"),
+    ],
+    aim: [loadTexture("../../assets/strike-enemy-action-game.png")],
+    fire: [loadTexture("../../assets/strike-enemy-fire-game.png")],
+    hit: [loadTexture("../../assets/strike-enemy-hit-game.png")],
+    down: [loadTexture("../../assets/strike-enemy-down-game.png")],
+  };
+  enemyActionTexture = enemyFrames.aim[0];
+  if (selectedMap.nature) {
+    sceneVideo = document.createElement("video");
+    sceneVideo.src = "../../assets/strike-remotion-scene.mp4";
+    sceneVideo.muted = true;
+    sceneVideo.loop = true;
+    sceneVideo.playsInline = true;
+    sceneVideo.autoplay = true;
+    sceneVideo.preload = "auto";
+    sceneVideo.play().catch(() => {});
+    sceneVideoTexture = new THREE.VideoTexture(sceneVideo);
+  }
   enemyTexture = enemyTextures[0];
-  [scenicTexture, enemyActionTexture, ...enemyTextures].forEach((texture) => {
+  [scenicTexture, sceneVideoTexture, ...Object.values(enemyFrames).flat()].filter(Boolean).forEach((texture) => {
     if (colorSpace) texture.colorSpace = colorSpace;
     texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
   });
@@ -601,7 +625,7 @@ function createCinematicBackdrop() {
   const backdrop = new THREE.Mesh(
     new THREE.PlaneGeometry(96, 54),
     new THREE.MeshBasicMaterial({
-      map: scenicTexture,
+      map: sceneVideoTexture || scenicTexture,
       color: 0xffffff,
       transparent: true,
       opacity: selectedMap.nature === "forest" ? 0.92 : 0.76,
@@ -1048,7 +1072,7 @@ function spawnBot() {
   const visorMat = new THREE.MeshBasicMaterial({ color: selectedMap.glow });
   const botTexture = enemyTextures.length ? enemyTextures[Math.floor(Math.random() * enemyTextures.length)] : enemyTexture;
   const idleTexture = botTexture;
-  const actionTexture = enemyActionTexture || botTexture;
+  const actionTexture = enemyFrames.aim?.[0] || enemyActionTexture || botTexture;
   if (botTexture) {
     [armorMat, clothMat, skinMat].forEach((material) => {
       material.transparent = true;
@@ -1142,8 +1166,12 @@ function spawnBot() {
     visualMaterial: visual?.material || null,
     idleTexture,
     actionTexture,
+    walkTextures: enemyFrames.walk || [actionTexture],
+    fireTexture: enemyFrames.fire?.[0] || actionTexture,
+    hitTexture: enemyFrames.hit?.[0] || actionTexture,
     visualBaseScale: visual ? visual.scale.clone() : null,
     hitReact: 0,
+    fireReact: 0,
     lastDistance: 999,
     health: selectedMode.botHealth + wave * 8,
     speed: selectedMode.botSpeed + Math.random() * 0.45 + wave * 0.025,
@@ -1282,11 +1310,38 @@ function showHitmarker() {
   showHitmarker.timer = window.setTimeout(() => ui.hitmarker.classList.remove("is-visible"), 110);
 }
 
+function setBotFrame(bot, texture) {
+  if (!bot.visualMaterial || !texture || bot.visualMaterial.map === texture) return;
+  bot.visualMaterial.map = texture;
+  bot.visualMaterial.needsUpdate = true;
+}
+
+function spawnDownedSprite(bot) {
+  const texture = enemyFrames.down?.[0] || bot.idleTexture;
+  if (!texture) return;
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    color: 0xffffff,
+    transparent: true,
+    alphaTest: 0.04,
+    fog: false,
+    depthWrite: false,
+  });
+  const sprite = new THREE.Sprite(material);
+  sprite.position.copy(bot.group.position);
+  sprite.position.y = 1.18;
+  sprite.scale.set(2.45, 2.2, 1);
+  sprite.renderOrder = 80;
+  scene.add(sprite);
+  decals.push({ mesh: sprite, life: 1.2 });
+}
+
 function removeBot(bot) {
   const index = bots.indexOf(bot);
   if (index >= 0) bots.splice(index, 1);
+  spawnDownedSprite(bot);
   bot.group.traverse((child) => {
-    if (child.isMesh) {
+    if (child.isMesh || child.isSprite) {
       const meshIndex = botMeshes.indexOf(child);
       if (meshIndex >= 0) botMeshes.splice(meshIndex, 1);
     }
@@ -1395,13 +1450,19 @@ function updateBots(delta) {
     bot.group.rotation.z = step * 0.035 * movingAmount;
     if (bot.visual && bot.visualBaseScale) {
       const aiming = distance < 24;
-      if (bot.visualMaterial && bot.actionTexture && bot.idleTexture) {
-        const nextTexture = aiming || movingAmount ? bot.actionTexture : bot.idleTexture;
-        if (bot.visualMaterial.map !== nextTexture) {
-          bot.visualMaterial.map = nextTexture;
-          bot.visualMaterial.needsUpdate = true;
-        }
+      bot.fireReact = Math.max(0, bot.fireReact - delta * 7);
+      let frameTexture = bot.idleTexture;
+      if (bot.hitReact > 0.06) {
+        frameTexture = bot.hitTexture;
+      } else if (bot.fireReact > 0.04) {
+        frameTexture = bot.fireTexture;
+      } else if (movingAmount) {
+        const frameIndex = Math.floor(gameTime * 8.5 + bot.speed * 2) % bot.walkTextures.length;
+        frameTexture = bot.walkTextures[frameIndex] || bot.actionTexture;
+      } else if (aiming) {
+        frameTexture = bot.actionTexture;
       }
+      setBotFrame(bot, frameTexture);
       const breathe = 1 + Math.sin(gameTime * 2.2 + bot.speed) * 0.018;
       const stride = 1 + Math.abs(step) * 0.035 * movingAmount;
       bot.hitReact = Math.max(0, bot.hitReact - delta * 5);
@@ -1418,6 +1479,7 @@ function updateBots(delta) {
 
     bot.nextShot -= delta;
     if (distance < 24 && bot.nextShot <= 0 && !lineBlocked(bot.group.position.clone().add(new THREE.Vector3(0, 1.35, 0)), camera.position)) {
+      bot.fireReact = 1;
       damagePlayer(selectedMode.damage + Math.floor(wave * 0.8));
       pushKillfeed("敌方步兵 命中 <b>你</b>");
       bot.nextShot = 1.2 + Math.random() * 1.1;
