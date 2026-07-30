@@ -48,8 +48,9 @@
           <small>当前目标</small>
           <strong id="objectiveText">清理移动 BOT</strong>
         </div>
+        <div class="killfeed" id="killfeed" aria-label="击杀提示"></div>
         <div class="radar" id="radar"></div>
-        <div class="crosshair" aria-hidden="true">
+        <div class="crosshair" id="crosshair" aria-hidden="true">
           <i></i><i></i><i></i><i></i>
         </div>
         <div class="hitmarker" id="hitmarker" aria-hidden="true">×</div>
@@ -65,6 +66,66 @@
           <button id="reloadBtn" type="button">换弹 R</button>
         </div>
         <div class="toast" id="toast" role="status" aria-live="polite"></div>
+      </section>
+
+      <section class="scoreboard-overlay" id="scoreboardOverlay" aria-label="实时计分板">
+        <div class="scoreboard-card">
+          <div>
+            <span>当前模式</span>
+            <strong id="boardMode">BOT 训练</strong>
+          </div>
+          <div>
+            <span>击破</span>
+            <strong id="boardKills">0</strong>
+          </div>
+          <div>
+            <span>命中率</span>
+            <strong id="boardAccuracy">0%</strong>
+          </div>
+          <div>
+            <span>最长连击</span>
+            <strong id="boardBestStreak">0</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-panel" id="settingsPanel" aria-label="设置面板">
+        <div class="settings-card">
+          <div class="panel-title">
+            <span>SETTINGS</span>
+            <strong>战斗设置</strong>
+          </div>
+          <label>
+            <span>鼠标灵敏度</span>
+            <input id="sensitivityInput" type="range" min="0.7" max="1.8" step="0.1" value="1" />
+          </label>
+          <label>
+            <span>音量</span>
+            <input id="volumeInput" type="range" min="0" max="1" step="0.05" value="0.45" />
+          </label>
+          <label class="toggle-row">
+            <span>性能模式</span>
+            <input id="qualityToggle" type="checkbox" />
+          </label>
+          <button id="resumeBtn" type="button">继续对局</button>
+        </div>
+      </section>
+
+      <section class="result-overlay" id="resultOverlay" aria-label="对局结算">
+        <div class="result-card">
+          <p class="eyebrow">MATCH REPORT</p>
+          <h2 id="resultTitle">任务完成</h2>
+          <div class="result-grid">
+            <span>击破 <strong id="resultKills">0</strong></span>
+            <span>命中率 <strong id="resultAccuracy">0%</strong></span>
+            <span>最长连击 <strong id="resultBestStreak">0</strong></span>
+            <span>用时 <strong id="resultTime">00:00</strong></span>
+          </div>
+          <div class="result-actions">
+            <button id="restartBtn" type="button">重新开始</button>
+            <a href="./index.html">返回大厅</a>
+          </div>
+        </div>
       </section>
     </main>
 

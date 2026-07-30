@@ -28,6 +28,25 @@ const ui = {
   objectiveText: document.querySelector("#objectiveText"),
   weaponName: document.querySelector("#weaponName"),
   roundLabel: document.querySelector("#roundLabel"),
+  crosshair: document.querySelector("#crosshair"),
+  killfeed: document.querySelector("#killfeed"),
+  scoreboard: document.querySelector("#scoreboardOverlay"),
+  settings: document.querySelector("#settingsPanel"),
+  result: document.querySelector("#resultOverlay"),
+  sensitivity: document.querySelector("#sensitivityInput"),
+  volume: document.querySelector("#volumeInput"),
+  quality: document.querySelector("#qualityToggle"),
+  resume: document.querySelector("#resumeBtn"),
+  restart: document.querySelector("#restartBtn"),
+  boardMode: document.querySelector("#boardMode"),
+  boardKills: document.querySelector("#boardKills"),
+  boardAccuracy: document.querySelector("#boardAccuracy"),
+  boardBestStreak: document.querySelector("#boardBestStreak"),
+  resultTitle: document.querySelector("#resultTitle"),
+  resultKills: document.querySelector("#resultKills"),
+  resultAccuracy: document.querySelector("#resultAccuracy"),
+  resultBestStreak: document.querySelector("#resultBestStreak"),
+  resultTime: document.querySelector("#resultTime"),
 };
 
 let THREE;
@@ -52,6 +71,18 @@ let reloading = false;
 let fireCooldown = 0;
 let botSpawnTimer = 0;
 let lastShotAt = 0;
+let firing = false;
+let recoilPitch = 0;
+let recoilYaw = 0;
+let shotsFired = 0;
+let shotsHit = 0;
+let bestStreak = 0;
+let matchStartedAt = 0;
+let matchEnded = false;
+let gameTime = 0;
+let sensitivity = 1;
+let masterVolume = 0.45;
+let audioContext = null;
 
 const bots = [];
 const botMeshes = [];
@@ -231,6 +262,51 @@ function showToast(message) {
   showToast.timer = window.setTimeout(() => {
     ui.toast.classList.remove("is-visible");
   }, 2400);
+}
+
+function ensureAudio() {
+  if (!audioContext) {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioContext.state === "suspended") audioContext.resume();
+}
+
+function playTone(frequency, duration, type = "square", volume = 0.22) {
+  if (!audioContext || masterVolume <= 0) return;
+  const now = audioContext.currentTime;
+  const osc = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(frequency, now);
+  gain.gain.setValueAtTime(volume * masterVolume, now);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+  osc.connect(gain).connect(audioContext.destination);
+  osc.start(now);
+  osc.stop(now + duration);
+}
+
+function playShotSound() {
+  const base = selectedWeapon === WEAPONS.sniper ? 82 : selectedWeapon === WEAPONS.smg ? 190 : 145;
+  playTone(base, selectedWeapon === WEAPONS.sniper ? 0.18 : 0.1, "sawtooth", selectedWeapon === WEAPONS.sniper ? 0.34 : 0.24);
+  playTone(base * 2.6, 0.045, "square", 0.08);
+}
+
+function playHitSound(critical) {
+  playTone(critical ? 980 : 620, 0.08, "sine", critical ? 0.16 : 0.1);
+}
+
+function playReloadSound() {
+  playTone(240, 0.08, "triangle", 0.12);
+  window.setTimeout(() => playTone(420, 0.08, "triangle", 0.1), 210);
+}
+
+function pushKillfeed(message) {
+  if (!ui.killfeed) return;
+  const item = document.createElement("span");
+  item.innerHTML = message;
+  ui.killfeed.prepend(item);
+  while (ui.killfeed.children.length > 4) ui.killfeed.lastElementChild.remove();
+  window.setTimeout(() => item.remove(), 4200);
 }
 
 function makeMaterial(color, roughness = 0.55, metalness = 0.08) {
@@ -516,27 +592,63 @@ function spawnWave() {
 
 function spawnBot() {
   const group = new THREE.Group();
-  const shell = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.45, 0.9, 6, 14),
-    new THREE.MeshStandardMaterial({
-      color: 0xff4567,
-      roughness: 0.32,
-      metalness: 0.18,
-      emissive: 0x3d0712,
-    }),
-  );
-  shell.castShadow = true;
-  group.add(shell);
+  const armorMat = new THREE.MeshStandardMaterial({
+    color: 0x384047,
+    roughness: 0.66,
+    metalness: 0.18,
+    emissive: 0x080b0d,
+  });
+  const clothMat = new THREE.MeshStandardMaterial({
+    color: 0x1b221f,
+    roughness: 0.9,
+    metalness: 0.04,
+  });
+  const skinMat = new THREE.MeshStandardMaterial({
+    color: 0x7e6758,
+    roughness: 0.78,
+    metalness: 0.02,
+  });
+  const visorMat = new THREE.MeshBasicMaterial({ color: selectedMap.glow });
 
-  const visor = new THREE.Mesh(
-    new THREE.BoxGeometry(0.6, 0.12, 0.05),
-    new THREE.MeshBasicMaterial({ color: 0x18f5ff }),
-  );
-  visor.position.set(0, 0.25, -0.42);
+  const parts = [
+    ["torso", new THREE.BoxGeometry(0.72, 0.98, 0.38), armorMat, [0, 0.95, 0]],
+    ["head", new THREE.SphereGeometry(0.24, 18, 14), skinMat, [0, 1.58, -0.02]],
+    ["vest", new THREE.BoxGeometry(0.62, 0.46, 0.44), armorMat, [0, 1.1, -0.04]],
+    ["leftArm", new THREE.CapsuleGeometry(0.11, 0.54, 5, 10), clothMat, [-0.48, 0.94, 0]],
+    ["rightArm", new THREE.CapsuleGeometry(0.11, 0.54, 5, 10), clothMat, [0.48, 0.94, 0]],
+    ["leftLeg", new THREE.CapsuleGeometry(0.13, 0.66, 5, 10), clothMat, [-0.18, 0.32, 0]],
+    ["rightLeg", new THREE.CapsuleGeometry(0.13, 0.66, 5, 10), clothMat, [0.18, 0.32, 0]],
+  ];
+
+  parts.forEach(([zone, geometry, material, position]) => {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(...position);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.userData.hitZone = zone;
+    group.add(mesh);
+    botMeshes.push(mesh);
+  });
+
+  const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.27, 18, 10, 0, Math.PI * 2, 0, Math.PI * 0.62), armorMat);
+  helmet.position.set(0, 1.64, -0.02);
+  helmet.castShadow = true;
+  helmet.userData.hitZone = "head";
+  group.add(helmet);
+  botMeshes.push(helmet);
+
+  const visor = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.06, 0.035), visorMat);
+  visor.position.set(0, 1.57, -0.24);
   group.add(visor);
 
+  const rifle = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.08, 0.1), armorMat);
+  rifle.position.set(0.26, 0.96, -0.38);
+  rifle.rotation.y = -0.08;
+  rifle.castShadow = true;
+  group.add(rifle);
+
   const spawn = randomSpawnPoint();
-  group.position.set(spawn.x, 1.05, spawn.z);
+  group.position.set(spawn.x, 0, spawn.z);
   scene.add(group);
 
   const bot = {
@@ -547,7 +659,6 @@ function spawnBot() {
     strafe: Math.random() > 0.5 ? 1 : -1,
   };
   bots.push(bot);
-  botMeshes.push(shell);
 }
 
 function randomSpawnPoint() {
@@ -563,14 +674,17 @@ function randomSpawnPoint() {
 
 function onMouseMove(event) {
   if (document.pointerLockElement !== ui.canvas) return;
-  yaw -= event.movementX * 0.0022;
-  pitch -= event.movementY * 0.002;
+  yaw -= event.movementX * 0.0022 * sensitivity;
+  pitch -= event.movementY * 0.002 * sensitivity;
   pitch = Math.max(-1.25, Math.min(1.18, pitch));
 }
 
 function onMouseDown(event) {
   if (!started || paused) return;
-  if (event.button === 0) shoot();
+  if (event.button === 0) {
+    firing = true;
+    shoot();
+  }
 }
 
 function shoot() {
@@ -582,30 +696,43 @@ function shoot() {
   }
 
   ammo -= 1;
+  shotsFired += 1;
   fireCooldown = selectedWeapon.fireRate;
   lastShotAt = performance.now();
   muzzleLight.intensity = selectedWeapon === WEAPONS.sniper ? 56 : 38;
   weapon.position.z = 0.045;
-  pitch += selectedWeapon.recoil + Math.random() * selectedWeapon.recoil * 0.45;
-  yaw += (Math.random() - 0.5) * selectedWeapon.recoil * 0.7;
+  recoilPitch += selectedWeapon.recoil + Math.random() * selectedWeapon.recoil * 0.45;
+  recoilYaw += (Math.random() - 0.5) * selectedWeapon.recoil * 0.7;
+  playShotSound();
 
   raycaster.setFromCamera({ x: 0, y: 0 }, camera);
+  const moving = player.velocity.lengthSq() > 0.0001;
+  const spread = (moving ? 0.014 : 0.004) + recoilPitch * 0.65;
+  raycaster.ray.direction.x += (Math.random() - 0.5) * spread;
+  raycaster.ray.direction.y += (Math.random() - 0.5) * spread;
+  raycaster.ray.direction.normalize();
   const hits = raycaster.intersectObjects(botMeshes, false);
   if (hits.length) {
     const mesh = hits[0].object;
     const bot = bots.find((item) => item.group.children.includes(mesh));
     if (bot) {
-      const critical = hits[0].point.y - bot.group.position.y > 0.22;
+      shotsHit += 1;
+      const critical = mesh.userData.hitZone === "head" || hits[0].point.y - bot.group.position.y > 1.34;
       bot.health -= critical ? selectedWeapon.critical : selectedWeapon.damage;
       spawnTracer(hits[0].point, critical ? 0xffd166 : selectedWeapon.tracer);
       spawnImpact(hits[0].point, critical ? 0xffd166 : selectedMap.glow);
       showHitmarker();
+      playHitSound(critical);
       if (bot.health <= 0) {
         removeBot(bot);
         kills += 1;
         streak += 1;
+        bestStreak = Math.max(bestStreak, streak);
         reserve = Math.min(selectedWeapon.reserve * 2, reserve + Math.round(8 * selectedMode.reserveScale));
-        showToast(critical ? "精准命中 +1" : "BOT 击破 +1");
+        const feed = critical ? "<b>你</b> 精准击破 敌方步兵" : "<b>你</b> 击破 敌方步兵";
+        pushKillfeed(feed);
+        showToast(critical ? "精准命中 +1" : "敌方步兵击破 +1");
+        if (selectedMode === MODES.deathmatch && kills >= 30) endMatch("团队竞技胜利");
       }
     }
   } else {
@@ -665,6 +792,7 @@ function reload() {
   if (reloading || ammo === selectedWeapon.mag || reserve <= 0) return;
   reloading = true;
   showToast("换弹中...");
+  playReloadSound();
   setTimeout(() => {
     const need = selectedWeapon.mag - ammo;
     const take = Math.min(need, reserve);
@@ -687,6 +815,7 @@ function updatePlayer(delta) {
   move.x = right * cos - forward * sin;
   move.z = right * sin + forward * cos;
   if (move.lengthSq() > 0) move.normalize().multiplyScalar(speed * delta);
+  player.velocity.copy(move);
 
   const next = camera.position.clone().add(move);
   next.x = Math.max(-40, Math.min(40, next.x));
@@ -697,7 +826,7 @@ function updatePlayer(delta) {
   }
   const bob = Math.sin(performance.now() * 0.009) * (move.lengthSq() > 0 ? 0.018 : 0.004);
   camera.position.y = player.height + bob;
-  camera.rotation.set(pitch, yaw, 0);
+  camera.rotation.set(pitch + recoilPitch, yaw + recoilYaw, 0);
 }
 
 function collides(position) {
@@ -707,6 +836,28 @@ function collides(position) {
       position.x < box.maxX &&
       position.z > box.minZ &&
       position.z < box.maxZ,
+  );
+}
+
+function lineBlocked(a, b) {
+  const dir = b.clone().sub(a);
+  const len = dir.length();
+  if (len <= 0) return false;
+  dir.normalize();
+  for (let d = 1.2; d < len; d += 1.2) {
+    const p = a.clone().add(dir.clone().multiplyScalar(d));
+    if (collides(p)) return true;
+  }
+  return false;
+}
+
+function botCollides(position) {
+  return obstacles.some(
+    (box) =>
+      position.x > box.minX + 0.16 &&
+      position.x < box.maxX - 0.16 &&
+      position.z > box.minZ + 0.16 &&
+      position.z < box.maxZ - 0.16,
   );
 }
 
@@ -723,13 +874,21 @@ function updateBots(delta) {
     const next = bot.group.position.clone().add(desired.multiplyScalar(bot.speed * delta));
     next.x = Math.max(-38, Math.min(38, next.x));
     next.z = Math.max(-38, Math.min(38, next.z));
-    bot.group.position.copy(next);
+    if (botCollides(next)) {
+      const side = bot.group.position.clone().add(tangent.normalize().multiplyScalar(bot.speed * delta * 1.8));
+      side.x = Math.max(-38, Math.min(38, side.x));
+      side.z = Math.max(-38, Math.min(38, side.z));
+      if (!botCollides(side)) bot.group.position.copy(side);
+    } else {
+      bot.group.position.copy(next);
+    }
     bot.group.lookAt(camera.position.x, bot.group.position.y, camera.position.z);
-    bot.group.position.y = 1.05 + Math.sin(performance.now() * 0.004 + bot.speed) * 0.08;
+    bot.group.position.y = Math.sin(gameTime * 5.5 + bot.speed) * 0.025;
 
     bot.nextShot -= delta;
-    if (distance < 24 && bot.nextShot <= 0) {
+    if (distance < 24 && bot.nextShot <= 0 && !lineBlocked(bot.group.position.clone().add(new THREE.Vector3(0, 1.35, 0)), camera.position)) {
       damagePlayer(selectedMode.damage + Math.floor(wave * 0.8));
+      pushKillfeed("敌方步兵 命中 <b>你</b>");
       bot.nextShot = 1.2 + Math.random() * 1.1;
     }
   });
@@ -742,17 +901,16 @@ function updateBots(delta) {
 }
 
 function damagePlayer(amount) {
+  if (matchEnded) return;
   health = Math.max(0, health - amount);
   streak = 0;
+  playTone(120, 0.1, "sawtooth", 0.16);
   ui.damage.classList.add("is-visible");
   window.clearTimeout(damagePlayer.timer);
   damagePlayer.timer = window.setTimeout(() => ui.damage.classList.remove("is-visible"), 130);
   if (health <= 0) {
-    health = 100;
-    ammo = selectedWeapon.mag;
-    reserve = Math.round(selectedWeapon.reserve * selectedMode.reserveScale);
-    camera.position.set(...selectedMap.spawn);
-    showToast("训练失败，已重新部署");
+    endMatch("行动失败");
+    showToast("行动失败，查看结算");
   }
   updateHud();
 }
@@ -771,8 +929,15 @@ function updateDecals(delta) {
 function updateWeapon(delta) {
   muzzleLight.intensity = Math.max(0, muzzleLight.intensity - delta * 180);
   weapon.position.z += (0 - weapon.position.z) * Math.min(1, delta * 18);
-  const swayX = Math.sin(performance.now() * 0.003) * 0.006;
+  const recover = delta * (selectedWeapon === WEAPONS.sniper ? 0.09 : 0.18);
+  recoilPitch = Math.max(0, recoilPitch - recover);
+  recoilYaw += (0 - recoilYaw) * Math.min(1, delta * 7);
+  const swayX = Math.sin(gameTime * 2.8) * 0.006;
   weapon.rotation.z = swayX;
+  if (ui.crosshair) {
+    const wide = firing || player.velocity.lengthSq() > 0.0001 || recoilPitch > 0.02;
+    ui.crosshair.classList.toggle("is-wide", wide);
+  }
 }
 
 function updateRadar() {
@@ -805,13 +970,48 @@ function updateHud() {
     health > 45
       ? "linear-gradient(90deg, var(--green), var(--cyan))"
       : "linear-gradient(90deg, var(--red), var(--gold))";
+  updateBoards();
+}
+
+function getAccuracy() {
+  return shotsFired > 0 ? Math.round((shotsHit / shotsFired) * 100) : 0;
+}
+
+function formatTime(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const minutes = String(Math.floor(total / 60)).padStart(2, "0");
+  const seconds = String(total % 60).padStart(2, "0");
+  return `${minutes}:${seconds}`;
+}
+
+function updateBoards() {
+  if (ui.boardMode) ui.boardMode.textContent = selectedMode.name;
+  if (ui.boardKills) ui.boardKills.textContent = String(kills);
+  if (ui.boardAccuracy) ui.boardAccuracy.textContent = `${getAccuracy()}%`;
+  if (ui.boardBestStreak) ui.boardBestStreak.textContent = String(bestStreak);
+}
+
+function endMatch(title) {
+  if (matchEnded) return;
+  matchEnded = true;
+  firing = false;
+  paused = true;
+  if (document.pointerLockElement === ui.canvas) document.exitPointerLock();
+  if (ui.resultTitle) ui.resultTitle.textContent = title;
+  if (ui.resultKills) ui.resultKills.textContent = String(kills);
+  if (ui.resultAccuracy) ui.resultAccuracy.textContent = `${getAccuracy()}%`;
+  if (ui.resultBestStreak) ui.resultBestStreak.textContent = String(bestStreak);
+  if (ui.resultTime) ui.resultTime.textContent = formatTime(performance.now() - matchStartedAt);
+  ui.result?.classList.add("is-visible");
 }
 
 function animate() {
   requestAnimationFrame(animate);
   const delta = Math.min(clock.getDelta(), 0.05);
   if (!paused) {
+    gameTime += delta;
     fireCooldown = Math.max(0, fireCooldown - delta);
+    if (firing) shoot();
     updatePlayer(delta);
     updateBots(delta);
     updateDecals(delta);
@@ -825,7 +1025,9 @@ function bindEvents() {
   ui.start.addEventListener("click", async () => {
     if (!started) {
       started = true;
+      matchStartedAt = performance.now();
       ui.boot.classList.add("is-hidden");
+      ensureAudio();
       showToast("点击画面锁定鼠标，开始训练");
     }
     try {
@@ -845,17 +1047,51 @@ function bindEvents() {
 
   document.addEventListener("pointerlockchange", () => {
     paused = document.pointerLockElement !== ui.canvas;
-    if (!paused) showToast("训练开始");
+    if (!paused) {
+      ui.settings?.classList.remove("is-visible");
+      showToast("训练开始");
+    } else if (started && !matchEnded && ui.boot.classList.contains("is-hidden")) {
+      ui.settings?.classList.add("is-visible");
+    }
   });
 
   document.addEventListener("mousemove", onMouseMove);
   document.addEventListener("mousedown", onMouseDown);
+  document.addEventListener("mouseup", (event) => {
+    if (event.button === 0) firing = false;
+  });
   document.addEventListener("keydown", (event) => {
+    if (event.code === "Tab") {
+      event.preventDefault();
+      ui.scoreboard?.classList.add("is-visible");
+    }
     keys.add(event.code);
     if (event.code === "KeyR") reload();
   });
-  document.addEventListener("keyup", (event) => keys.delete(event.code));
+  document.addEventListener("keyup", (event) => {
+    if (event.code === "Tab") ui.scoreboard?.classList.remove("is-visible");
+    keys.delete(event.code);
+  });
   ui.reload.addEventListener("click", reload);
+  ui.sensitivity?.addEventListener("input", () => {
+    sensitivity = Number(ui.sensitivity.value);
+  });
+  ui.volume?.addEventListener("input", () => {
+    masterVolume = Number(ui.volume.value);
+  });
+  ui.quality?.addEventListener("change", () => {
+    const low = ui.quality.checked;
+    renderer.setPixelRatio(low ? 1 : Math.min(window.devicePixelRatio, 1.8));
+    renderer.shadowMap.enabled = !low;
+    showToast(low ? "性能模式已开启" : "画质模式已开启");
+  });
+  ui.resume?.addEventListener("click", () => {
+    ui.settings?.classList.remove("is-visible");
+    ui.canvas.requestPointerLock().catch(() => showToast("请点击画面继续"));
+  });
+  ui.restart?.addEventListener("click", () => {
+    window.location.reload();
+  });
   window.addEventListener("resize", () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
@@ -868,12 +1104,14 @@ function enableDemoMode() {
   if (!params.has("demo")) return;
   started = true;
   paused = false;
+  matchStartedAt = performance.now();
   ui.boot.classList.add("is-hidden");
   showToast("演示模式：训练场已载入");
 }
 
 async function main() {
   try {
+    if (params.has("demo")) ui.boot.classList.add("is-hidden");
     THREE = await loadThree();
     initScene();
     bindEvents();
