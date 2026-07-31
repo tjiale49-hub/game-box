@@ -11,6 +11,10 @@
   --glass: rgba(8, 11, 15, 0.78);
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -366,6 +370,21 @@ a {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent),
     rgba(10, 13, 18, 0.82);
+  transition: transform 280ms ease, border-color 280ms ease, box-shadow 280ms ease;
+}
+
+.mode-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(24, 245, 255, 0.32);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.36);
+}
+
+.mode-card a {
+  transition: background 200ms ease;
+}
+
+.mode-card:hover a {
+  background: rgba(255, 255, 255, 0.18);
 }
 
 .mode-card.is-featured {
@@ -644,6 +663,18 @@ a {
   color: white;
   text-decoration: none;
   background: #111;
+  transition: transform 320ms ease, border-color 320ms ease, box-shadow 320ms ease;
+}
+
+.scene-card:hover {
+  transform: translateY(-6px);
+  border-color: rgba(255, 209, 102, 0.38);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(255, 209, 102, 0.15);
+}
+
+.scene-card:hover strong {
+  color: var(--gold);
+  transition: color 240ms ease;
 }
 
 .scene-card::before,
@@ -1350,6 +1381,130 @@ p {
   transform: translate(-50%, 0);
 }
 
+/* ── Scroll-reveal entrance animation ── */
+.scroll-reveal {
+  opacity: 0;
+  transform: translateY(32px);
+  transition: opacity 620ms ease, transform 620ms ease;
+}
+
+.scroll-reveal.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* stagger children inside revealed grids */
+.scroll-reveal.is-visible .cinematic-map-grid > *,
+.scroll-reveal.is-visible .mode-grid > * {
+  animation: cardFadeIn 480ms ease both;
+}
+.scroll-reveal.is-visible .cinematic-map-grid > *:nth-child(2),
+.scroll-reveal.is-visible .mode-grid > *:nth-child(2) { animation-delay: 80ms; }
+.scroll-reveal.is-visible .cinematic-map-grid > *:nth-child(3),
+.scroll-reveal.is-visible .mode-grid > *:nth-child(3) { animation-delay: 160ms; }
+.scroll-reveal.is-visible .cinematic-map-grid > *:nth-child(4),
+.scroll-reveal.is-visible .mode-grid > *:nth-child(4) { animation-delay: 240ms; }
+.scroll-reveal.is-visible .cinematic-map-grid > *:nth-child(5) { animation-delay: 320ms; }
+.scroll-reveal.is-visible .cinematic-map-grid > *:nth-child(6) { animation-delay: 400ms; }
+.scroll-reveal.is-visible .cinematic-map-grid > *:nth-child(7) { animation-delay: 480ms; }
+.scroll-reveal.is-visible .cinematic-map-grid > *:nth-child(8) { animation-delay: 560ms; }
+
+@keyframes cardFadeIn {
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Button hover effects ── */
+.primary-start {
+  transition: transform 200ms ease, box-shadow 200ms ease;
+}
+
+.primary-start:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 28px rgba(255, 209, 102, 0.3);
+}
+
+.secondary-start {
+  transition: transform 200ms ease, background 200ms ease;
+}
+
+.secondary-start:hover {
+  transform: translateY(-2px);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+/* ── Footer ── */
+.site-footer {
+  margin-top: 48px;
+  padding: 24px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.footer-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.footer-brand {
+  color: var(--gold);
+  font-weight: 900;
+  font-size: 15px;
+}
+
+.footer-copy {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.footer-top {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 13px;
+  background: rgba(255, 255, 255, 0.05);
+  transition: background 200ms ease;
+}
+
+.footer-top:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* ── Boot loading state ── */
+.boot-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--cyan);
+  font-size: 16px;
+}
+
+.boot-loading::after {
+  content: "";
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(24, 245, 255, 0.25);
+  border-top-color: var(--cyan);
+  border-radius: 50%;
+  animation: bootSpin 0.8s linear infinite;
+}
+
+@keyframes bootSpin {
+  to { transform: rotate(360deg); }
+}
+
+.boot-card button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 @media (max-width: 760px) {
   .strike-lobby {
     padding: 14px;
@@ -1429,5 +1584,14 @@ p {
 
   .killfeed {
     display: none;
+  }
+
+  .footer-inner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .scroll-reveal {
+    transform: translateY(16px);
   }
 }

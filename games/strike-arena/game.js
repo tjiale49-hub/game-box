@@ -97,6 +97,27 @@ const botMeshes = [];
 const obstacles = [];
 const decals = [];
 const keys = new Set();
+// O(1) lookup from any bot mesh/sprite -> owning bot (replaces bots.find + children.includes).
+const meshToBot = new Map();
+// Object pools for transient shot effects (initialized in initPools after THREE loads).
+const tracerPool = [];
+const sparkPool = [];
+let tracerCursor = 0;
+let sparkCursor = 0;
+// Pre-created radar dot element pool (updated in place each frame instead of recreate).
+const radarDots = [];
+// Cached HUD state for dirty-checking text/style updates.
+const hudCache = {};
+// Reusable temporary vectors so updateBots does not allocate every frame.
+let tmpV1 = null;
+let tmpV2 = null;
+let tmpV3 = null;
+let tmpV4 = null;
+let tmpV5 = null;
+// Reused up-vector for tracer orientation.
+let UP_VECTOR = null;
+// Cached noise buffer for the noise-based gunshot sound.
+let shotNoiseBuffer = null;
 const player = {
   position: null,
   velocity: null,
@@ -363,6 +384,7 @@ function showToast(message) {
 function ensureAudio() {
   if (!audioContext) {
     audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    shotNoiseBuffer = null;
   }
   if (audioContext.state === "suspended") audioContext.resume();
 }
@@ -381,10 +403,69 @@ function playTone(frequency, duration, type = "square", volume = 0.22) {
   osc.stop(now + duration);
 }
 
+function getShotNoiseBuffer() {
+  if (shotNoiseBuffer) return shotNoiseBuffer;
+  const duration = 0.3;
+  const length = Math.floor(audioContext.sampleRate * duration);
+  const buffer = audioContext.createBuffer(1, length, audioContext.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < length; i += 1) {
+    const decay = 1 - i / length;
+    data[i] = (Math.random() * 2 - 1) * decay * decay;
+  }
+  shotNoiseBuffer = buffer;
+  return buffer;
+}
+
 function playShotSound() {
-  const base = selectedWeapon === WEAPONS.sniper ? 82 : selectedWeapon === WEAPONS.smg ? 190 : 145;
-  playTone(base, selectedWeapon === WEAPONS.sniper ? 0.18 : 0.1, "sawtooth", selectedWeapon === WEAPONS.sniper ? 0.34 : 0.24);
-  playTone(base * 2.6, 0.045, "square", 0.08);
+  if (!audioContext || masterVolume <= 0) return;
+  const now = audioContext.currentTime;
+  const isSniper = selectedWeapon === WEAPONS.sniper;
+  const isSmg = selectedWeapon === WEAPONS.smg;
+  const bodyDuration = isSniper ? 0.22 : isSmg ? 0.09 : 0.13;
+  const bodyVolume = (isSniper ? 0.5 : isSmg ? 0.3 : 0.36) * masterVolume;
+  const noiseBuffer = getShotNoiseBuffer();
+
+  // Lowpassed noise body (the "thump").
+  const bodySrc = audioContext.createBufferSource();
+  bodySrc.buffer = noiseBuffer;
+  const bodyFilter = audioContext.createBiquadFilter();
+  bodyFilter.type = "lowpass";
+  bodyFilter.frequency.setValueAtTime(isSniper ? 900 : isSmg ? 2200 : 1500, now);
+  bodyFilter.frequency.exponentialRampToValueAtTime(isSniper ? 220 : 480, now + bodyDuration);
+  const bodyGain = audioContext.createGain();
+  bodyGain.gain.setValueAtTime(bodyVolume, now);
+  bodyGain.gain.exponentialRampToValueAtTime(0.001, now + bodyDuration);
+  bodySrc.connect(bodyFilter).connect(bodyGain).connect(audioContext.destination);
+  bodySrc.start(now);
+  bodySrc.stop(now + bodyDuration);
+
+  // Highpassed noise crack (the "snap").
+  const crackSrc = audioContext.createBufferSource();
+  crackSrc.buffer = noiseBuffer;
+  const crackFilter = audioContext.createBiquadFilter();
+  crackFilter.type = "highpass";
+  crackFilter.frequency.setValueAtTime(isSniper ? 1800 : 2600, now);
+  const crackGain = audioContext.createGain();
+  const crackDuration = isSniper ? 0.08 : 0.05;
+  crackGain.gain.setValueAtTime(0.18 * masterVolume, now);
+  crackGain.gain.exponentialRampToValueAtTime(0.001, now + crackDuration);
+  crackSrc.connect(crackFilter).connect(crackGain).connect(audioContext.destination);
+  crackSrc.start(now);
+  crackSrc.stop(now + crackDuration);
+
+  // Sub oscillator tail for low-end punch.
+  const sub = audioContext.createOscillator();
+  const subGain = audioContext.createGain();
+  const subBase = isSniper ? 70 : isSmg ? 150 : 110;
+  sub.type = "sine";
+  sub.frequency.setValueAtTime(subBase, now);
+  sub.frequency.exponentialRampToValueAtTime(subBase * 0.5, now + bodyDuration);
+  subGain.gain.setValueAtTime(0.22 * masterVolume, now);
+  subGain.gain.exponentialRampToValueAtTime(0.001, now + bodyDuration);
+  sub.connect(subGain).connect(audioContext.destination);
+  sub.start(now);
+  sub.stop(now + bodyDuration);
 }
 
 function playHitSound(critical) {
@@ -515,6 +596,13 @@ function initScene() {
   raycaster = new THREE.Raycaster();
   player.position = camera.position;
   player.velocity = new THREE.Vector3();
+  tmpV1 = new THREE.Vector3();
+  tmpV2 = new THREE.Vector3();
+  tmpV3 = new THREE.Vector3();
+  tmpV4 = new THREE.Vector3();
+  tmpV5 = new THREE.Vector3();
+  UP_VECTOR = new THREE.Vector3(0, 1, 0);
+  grassDummy = new THREE.Object3D();
   ammo = selectedWeapon.mag;
   reserve = Math.round(selectedWeapon.reserve * selectedMode.reserveScale);
 
@@ -537,6 +625,8 @@ function initScene() {
 
   applyScenarioText();
   createArena();
+  initPools();
+  initRadarDots();
   createWeapon();
   spawnWave();
   updateHud();
@@ -551,6 +641,9 @@ function applyScenarioText() {
   if (ui.weaponName) ui.weaponName.textContent = selectedWeapon.name;
   if (ui.roundLabel) ui.roundLabel.innerHTML = selectedMode === MODES.deathmatch ? '回合 <strong id="wave">1</strong>' : '波次 <strong id="wave">1</strong>';
   ui.wave = document.querySelector("#wave");
+  // The #wave element was just recreated; clear cached HUD values so updateHud
+  // repopulates the fresh elements instead of skipping them as "unchanged".
+  Object.keys(hudCache).forEach((key) => delete hudCache[key]);
 }
 
 function createArena() {
@@ -812,9 +905,14 @@ function createRock(x, z, scale = 1) {
   scene.add(rock);
 }
 
-function createGrassCluster(x, z, scale = 1) {
+// Scratch object reused while filling the grass InstancedMesh.
+let grassDummy = null;
+
+function createGrassField(clusterPositions) {
+  if (!clusterPositions.length) return;
   const color = selectedMap.nature === "snow" ? 0xcbd6d8 : selectedMap.nature === "harbor" ? 0x293f3a : 0x2e4f2f;
-  const mat = new THREE.MeshStandardMaterial({
+  const bladeCount = selectedMap.nature === "quarry" ? 4 : 7;
+  const material = new THREE.MeshStandardMaterial({
     color,
     roughness: 0.96,
     metalness: 0,
@@ -822,15 +920,30 @@ function createGrassCluster(x, z, scale = 1) {
     transparent: true,
     opacity: selectedMap.nature === "snow" ? 0.62 : 0.88,
   });
-  const bladeCount = selectedMap.nature === "quarry" ? 4 : 7;
-  for (let i = 0; i < bladeCount; i += 1) {
-    const blade = new THREE.Mesh(new THREE.PlaneGeometry(0.08 * scale, (0.55 + Math.random() * 0.65) * scale), mat);
-    blade.position.set(x + (Math.random() - 0.5) * 0.7 * scale, 0.22 * scale, z + (Math.random() - 0.5) * 0.7 * scale);
-    blade.rotation.y = Math.random() * Math.PI;
-    blade.rotation.z = (Math.random() - 0.5) * 0.42;
-    blade.castShadow = true;
-    scene.add(blade);
+  const geometry = new THREE.PlaneGeometry(0.08, 1);
+  const total = clusterPositions.length * bladeCount;
+  const grass = new THREE.InstancedMesh(geometry, material, total);
+  grass.castShadow = true;
+  grass.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+  let index = 0;
+  for (const cluster of clusterPositions) {
+    for (let i = 0; i < bladeCount; i += 1) {
+      const height = (0.55 + Math.random() * 0.65) * cluster.scale;
+      grassDummy.position.set(
+        cluster.x + (Math.random() - 0.5) * 0.7 * cluster.scale,
+        0.22 * cluster.scale,
+        cluster.z + (Math.random() - 0.5) * 0.7 * cluster.scale,
+      );
+      grassDummy.rotation.set(0, Math.random() * Math.PI, (Math.random() - 0.5) * 0.42);
+      grassDummy.scale.set(cluster.scale, height, cluster.scale);
+      grassDummy.updateMatrix();
+      grass.setMatrixAt(index, grassDummy.matrix);
+      index += 1;
+    }
   }
+  grass.count = index;
+  grass.instanceMatrix.needsUpdate = true;
+  scene.add(grass);
 }
 
 function createBush(x, z, scale = 1) {
@@ -956,12 +1069,14 @@ function createNatureLayer() {
     createRock(-34 + Math.random() * 68, -34 + Math.random() * 68, 0.3 + Math.random() * 0.9);
   }
   const grassCount = sparse ? 46 : selectedMap.nature === "snow" ? 64 : 120;
+  const grassClusters = [];
   for (let i = 0; i < grassCount; i += 1) {
     const x = -38 + Math.random() * 76;
     const z = -38 + Math.random() * 76;
     if (Math.abs(x - camera.position.x) < 3 && Math.abs(z - camera.position.z) < 4) continue;
-    createGrassCluster(x, z, 0.65 + Math.random() * 1.1);
+    grassClusters.push({ x, z, scale: 0.65 + Math.random() * 1.1 });
   }
+  createGrassField(grassClusters);
   const bushCount = sparse ? 8 : selectedMap.nature === "snow" ? 10 : 24;
   for (let i = 0; i < bushCount; i += 1) {
     createBush(-36 + Math.random() * 72, -36 + Math.random() * 72, 0.38 + Math.random() * 0.72);
@@ -1179,6 +1294,9 @@ function spawnBot() {
     strafe: Math.random() > 0.5 ? 1 : -1,
   };
   bots.push(bot);
+  group.traverse((child) => {
+    if (child.isMesh || child.isSprite) meshToBot.set(child, bot);
+  });
 }
 
 function randomSpawnPoint() {
@@ -1247,7 +1365,7 @@ function shoot() {
   const hits = raycaster.intersectObjects(botMeshes, false);
   if (hits.length) {
     const mesh = hits[0].object;
-    const bot = bots.find((item) => item.group.children.includes(mesh));
+    const bot = meshToBot.get(mesh);
     if (bot) {
       shotsHit += 1;
       const critical = mesh.userData.hitZone === "head" || hits[0].point.y - bot.group.position.y > 1.34;
@@ -1270,37 +1388,59 @@ function shoot() {
       }
     }
   } else {
-    const end = camera.position.clone().add(raycaster.ray.direction.clone().multiplyScalar(38));
-    spawnTracer(end, 0xffffff);
+    tmpV2.copy(camera.position).addScaledVector(raycaster.ray.direction, 38);
+    spawnTracer(tmpV2, 0xffffff);
   }
   updateHud();
 }
 
+function initPools() {
+  const tracerGeometry = new THREE.CylinderGeometry(0.012, 0.012, 1, 8);
+  for (let i = 0; i < 20; i += 1) {
+    const material = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 });
+    const tracer = new THREE.Mesh(tracerGeometry, material);
+    tracer.visible = false;
+    tracer.frustumCulled = false;
+    scene.add(tracer);
+    tracerPool.push(tracer);
+  }
+  const sparkGeometry = new THREE.BoxGeometry(0.035, 0.035, 0.38);
+  for (let i = 0; i < 30; i += 1) {
+    const material = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 });
+    const spark = new THREE.Mesh(sparkGeometry, material);
+    spark.visible = false;
+    spark.frustumCulled = false;
+    scene.add(spark);
+    sparkPool.push(spark);
+  }
+}
+
 function spawnTracer(point, color) {
+  const tracer = tracerPool[tracerCursor];
+  tracerCursor = (tracerCursor + 1) % tracerPool.length;
   const start = camera.localToWorld(new THREE.Vector3(0.32, -0.22, -1.86));
-  const direction = point.clone().sub(start);
-  const length = direction.length();
-  const geometry = new THREE.CylinderGeometry(0.012, 0.012, length, 8);
-  const material = new THREE.MeshBasicMaterial({
-    color,
-    transparent: true,
-    opacity: 0.8,
-  });
-  const tracer = new THREE.Mesh(geometry, material);
-  tracer.position.copy(start.clone().add(point).multiplyScalar(0.5));
-  tracer.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
-  scene.add(tracer);
-  decals.push({ mesh: tracer, life: 0.06 });
+  tmpV1.copy(point).sub(start);
+  const length = tmpV1.length();
+  if (length > 0.0001) tmpV1.normalize();
+  tracer.position.copy(start).add(point).multiplyScalar(0.5);
+  tracer.quaternion.setFromUnitVectors(UP_VECTOR, tmpV1);
+  tracer.scale.set(1, length, 1);
+  tracer.material.color.setHex(color);
+  tracer.material.opacity = 0.8;
+  tracer.visible = true;
+  decals.push({ mesh: tracer, life: 0.06, pooled: true });
 }
 
 function spawnImpact(point, color) {
-  const sparkMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.88 });
   for (let i = 0; i < 5; i += 1) {
-    const spark = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.035, 0.38), sparkMat.clone());
+    const spark = sparkPool[sparkCursor];
+    sparkCursor = (sparkCursor + 1) % sparkPool.length;
     spark.position.copy(point);
     spark.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
-    scene.add(spark);
-    decals.push({ mesh: spark, life: 0.12 + Math.random() * 0.08 });
+    spark.material.color.setHex(color);
+    spark.material.opacity = 0.88;
+    spark.visible = true;
+    decals.push({ mesh: spark, life: 0.12 + Math.random() * 0.08, pooled: true });
   }
 }
 
@@ -1344,6 +1484,7 @@ function removeBot(bot) {
     if (child.isMesh || child.isSprite) {
       const meshIndex = botMeshes.indexOf(child);
       if (meshIndex >= 0) botMeshes.splice(meshIndex, 1);
+      meshToBot.delete(child);
     }
   });
   scene.remove(bot.group);
@@ -1425,18 +1566,18 @@ function botCollides(position) {
 function updateBots(delta) {
   botSpawnTimer -= delta;
   bots.forEach((bot) => {
-    const toPlayer = camera.position.clone().sub(bot.group.position);
+    const toPlayer = tmpV1.copy(camera.position).sub(bot.group.position);
     const distance = toPlayer.length();
     toPlayer.y = 0;
     const dir = toPlayer.normalize();
-    const tangent = new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar(bot.strafe);
-    const desired = dir.multiplyScalar(distance > 8 ? 1 : -0.2).add(tangent.multiplyScalar(0.42));
+    const tangent = tmpV2.set(-dir.z, 0, dir.x).multiplyScalar(bot.strafe);
+    const desired = tmpV3.copy(dir).multiplyScalar(distance > 8 ? 1 : -0.2).addScaledVector(tangent, 0.42);
     if (desired.lengthSq() > 0) desired.normalize();
-    const next = bot.group.position.clone().add(desired.multiplyScalar(bot.speed * delta));
+    const next = tmpV4.copy(bot.group.position).addScaledVector(desired, bot.speed * delta);
     next.x = Math.max(-38, Math.min(38, next.x));
     next.z = Math.max(-38, Math.min(38, next.z));
     if (botCollides(next)) {
-      const side = bot.group.position.clone().add(tangent.normalize().multiplyScalar(bot.speed * delta * 1.8));
+      const side = tmpV5.copy(bot.group.position).addScaledVector(tangent.normalize(), bot.speed * delta * 1.8);
       side.x = Math.max(-38, Math.min(38, side.x));
       side.z = Math.max(-38, Math.min(38, side.z));
       if (!botCollides(side)) bot.group.position.copy(side);
@@ -1478,7 +1619,7 @@ function updateBots(delta) {
     }
 
     bot.nextShot -= delta;
-    if (distance < 24 && bot.nextShot <= 0 && !lineBlocked(bot.group.position.clone().add(new THREE.Vector3(0, 1.35, 0)), camera.position)) {
+    if (distance < 24 && bot.nextShot <= 0 && !lineBlocked(tmpV5.copy(bot.group.position).setY(bot.group.position.y + 1.35), camera.position)) {
       bot.fireReact = 1;
       damagePlayer(selectedMode.damage + Math.floor(wave * 0.8));
       pushKillfeed("敌方步兵 命中 <b>你</b>");
@@ -1513,7 +1654,12 @@ function updateDecals(delta) {
     decals[i].life -= delta;
     decals[i].mesh.material.opacity = Math.max(0, decals[i].life * 12);
     if (decals[i].life <= 0) {
-      scene.remove(decals[i].mesh);
+      if (decals[i].pooled) {
+        decals[i].mesh.visible = false;
+        decals[i].mesh.material.opacity = 0;
+      } else {
+        scene.remove(decals[i].mesh);
+      }
       decals.splice(i, 1);
     }
   }
@@ -1533,36 +1679,67 @@ function updateWeapon(delta) {
   }
 }
 
-function updateRadar() {
-  ui.radar.querySelectorAll(".radar-dot").forEach((dot) => dot.remove());
-  bots.forEach((bot) => {
-    const dx = bot.group.position.x - camera.position.x;
-    const dz = bot.group.position.z - camera.position.z;
-    const scale = 1.6;
-    const x = 69 + dx * scale;
-    const y = 69 + dz * scale;
-    if (x < 6 || x > 132 || y < 6 || y > 132) return;
+function initRadarDots() {
+  if (!ui.radar) return;
+  for (let i = 0; i < 16; i += 1) {
     const dot = document.createElement("span");
     dot.className = "radar-dot";
+    dot.style.visibility = "hidden";
+    ui.radar.appendChild(dot);
+    radarDots.push(dot);
+  }
+}
+
+function updateRadar() {
+  if (!ui.radar) return;
+  const scale = 1.6;
+  for (let i = 0; i < radarDots.length; i += 1) {
+    const dot = radarDots[i];
+    const bot = bots[i];
+    if (!bot) {
+      if (dot.style.visibility !== "hidden") dot.style.visibility = "hidden";
+      continue;
+    }
+    const x = 69 + (bot.group.position.x - camera.position.x) * scale;
+    const y = 69 + (bot.group.position.z - camera.position.z) * scale;
+    if (x < 6 || x > 132 || y < 6 || y > 132) {
+      if (dot.style.visibility !== "hidden") dot.style.visibility = "hidden";
+      continue;
+    }
     dot.style.left = `${x}px`;
     dot.style.top = `${y}px`;
-    ui.radar.appendChild(dot);
-  });
+    if (dot.style.visibility !== "visible") dot.style.visibility = "visible";
+  }
+}
+
+function setHudText(key, element, value) {
+  if (!element || hudCache[key] === value) return;
+  hudCache[key] = value;
+  element.textContent = value;
 }
 
 function updateHud() {
-  ui.kills.textContent = String(kills);
-  ui.wave.textContent = String(wave);
-  ui.streak.textContent = String(streak);
-  ui.ammo.textContent = String(ammo);
-  ui.reserve.textContent = String(reserve);
-  if (ui.weaponName) ui.weaponName.textContent = selectedWeapon.name;
-  ui.healthText.textContent = String(Math.round(health));
-  ui.healthFill.style.width = `${health}%`;
-  ui.healthFill.style.background =
+  setHudText("kills", ui.kills, String(kills));
+  setHudText("wave", ui.wave, String(wave));
+  setHudText("streak", ui.streak, String(streak));
+  setHudText("ammo", ui.ammo, String(ammo));
+  setHudText("reserve", ui.reserve, String(reserve));
+  if (ui.weaponName) setHudText("weaponName", ui.weaponName, selectedWeapon.name);
+  const healthRounded = String(Math.round(health));
+  setHudText("healthText", ui.healthText, healthRounded);
+  const healthWidth = `${health}%`;
+  if (hudCache.healthWidth !== healthWidth) {
+    hudCache.healthWidth = healthWidth;
+    ui.healthFill.style.width = healthWidth;
+  }
+  const healthBackground =
     health > 45
       ? "linear-gradient(90deg, var(--green), var(--cyan))"
       : "linear-gradient(90deg, var(--red), var(--gold))";
+  if (hudCache.healthBackground !== healthBackground) {
+    hudCache.healthBackground = healthBackground;
+    ui.healthFill.style.background = healthBackground;
+  }
   updateBoards();
 }
 
@@ -1703,9 +1880,15 @@ function enableDemoMode() {
 }
 
 async function main() {
+  const bootLoading = document.querySelector("#bootLoading");
+  const bootCardText = document.querySelector("#bootDesc");
+  const originalBootText = bootCardText ? bootCardText.textContent : "";
   try {
     if (params.has("demo")) ui.boot.classList.add("is-hidden");
     THREE = await loadThree();
+    if (bootLoading) bootLoading.style.display = "none";
+    if (bootCardText) bootCardText.textContent = originalBootText;
+    if (ui.start) ui.start.disabled = false;
     initScene();
     bindEvents();
     enableDemoMode();
@@ -1716,7 +1899,8 @@ async function main() {
     console.error(error);
     window.__strikeArenaError = error.message;
     document.documentElement.dataset.strikeArena = "error";
-    document.querySelector(".boot-card p").textContent = error.message;
+    if (bootLoading) bootLoading.style.display = "none";
+    if (bootCardText) bootCardText.textContent = error.message;
     ui.start.disabled = true;
     ui.start.textContent = "加载失败";
   }

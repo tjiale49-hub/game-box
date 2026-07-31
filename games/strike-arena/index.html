@@ -41,7 +41,7 @@
           <p class="eyebrow">CINEMATIC WEB FPS</p>
           <h1>自然战区，真实干员，进入下一场突击。</h1>
           <p>
-            参考 MotionSites 高级动效首页的电影感结构，重做为原创 FPS 官网首屏：大场景、强对比、战术数据、自然地图卡和独立对局入口。
+            八张真实自然战场，四种作战模式，真实人形干员对手。选择你的战区和武器，进入电影级 FPS 对局。
           </p>
           <div class="hero-actions">
             <a class="primary-start" href="./play.html?mode=deathmatch&map=rainforest&weapon=carbine">
@@ -58,7 +58,7 @@
         </aside>
       </section>
 
-      <section class="lobby-section" id="maps">
+      <section class="lobby-section scroll-reveal" id="maps">
         <div class="section-title">
           <p class="eyebrow">NATURAL BATTLEFIELDS</p>
           <h2>真实自然场景地图</h2>
@@ -107,7 +107,7 @@
         </div>
       </section>
 
-      <section class="lobby-section" id="modes">
+      <section class="lobby-section scroll-reveal" id="modes">
         <div class="section-title">
           <p class="eyebrow">MODE SELECT</p>
           <h2>作战模式</h2>
@@ -140,7 +140,7 @@
         </div>
       </section>
 
-      <section class="operator-band" id="operators">
+      <section class="operator-band scroll-reveal" id="operators">
         <div>
           <p class="eyebrow">OPERATORS</p>
           <h2>真实人形干员已上线</h2>
@@ -149,7 +149,7 @@
         <a class="primary-start" href="./play.html?mode=deathmatch&map=rainforest&weapon=carbine">查看对局</a>
       </section>
 
-      <section class="mission-band" id="season">
+      <section class="mission-band scroll-reveal" id="season">
         <div>
           <p class="eyebrow">SEASON TASKS</p>
           <h2>今日任务</h2>
@@ -160,6 +160,32 @@
           <li>海岸断崖保持 70% 以上血量撤离</li>
         </ol>
       </section>
+
+      <footer class="site-footer">
+        <div class="footer-inner">
+          <span class="footer-brand">Strike Arena</span>
+          <span class="footer-copy">高能突击 &copy; 2026 &middot; 网页 FPS 对战平台</span>
+          <a class="footer-top" href="#" aria-label="回到顶部">↑ 顶部</a>
+        </div>
+      </footer>
     </main>
+    <script>
+      (function () {
+        var io = new IntersectionObserver(
+          function (entries) {
+            entries.forEach(function (e) {
+              if (e.isIntersecting) {
+                e.target.classList.add("is-visible");
+                io.unobserve(e.target);
+              }
+            });
+          },
+          { threshold: 0.12 }
+        );
+        document.querySelectorAll(".scroll-reveal").forEach(function (el) {
+          io.observe(el);
+        });
+      })();
+    </script>
   </body>
 </html>
