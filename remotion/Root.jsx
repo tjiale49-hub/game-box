@@ -1,6 +1,7 @@
 import React from "react";
 import {AbsoluteFill, Composition, interpolate, useCurrentFrame, useVideoConfig} from "remotion";
 import hero from "../assets/strike-arena-hero.png";
+import {CityScene} from "./CityScene.jsx";
 
 const MistLayer = ({delay = 0, top = 0, opacity = 0.22}) => {
   const frame = useCurrentFrame();
@@ -143,5 +144,8 @@ const StrikeScene = () => {
 };
 
 export const Root = () => (
-  <Composition id="StrikeScene" component={StrikeScene} durationInFrames={180} fps={30} width={1920} height={1080} />
+  <>
+    <Composition id="StrikeScene" component={StrikeScene} durationInFrames={180} fps={30} width={1920} height={1080} />
+    <Composition id="CityScene" component={CityScene} durationInFrames={180} fps={30} width={1920} height={1080} />
+  </>
 );

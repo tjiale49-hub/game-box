@@ -62,7 +62,10 @@ let enemyActionTexture;
 let enemyFrames = {};
 let sceneVideo;
 let sceneVideoTexture;
+let cityVideo;
+let cityVideoTexture;
 let scenicTexture;
+let buildingFacades = {};
 let weapon;
 let muzzleLight;
 let raycaster;
@@ -606,6 +609,13 @@ function loadProjectTextures() {
     down: [loadTexture("../../assets/strike-enemy-down-game.png")],
   };
   enemyActionTexture = enemyFrames.aim[0];
+  // Photorealistic building facade textures (generated assets).
+  buildingFacades = {
+    concrete: textureLoader.load("../../assets/building-concrete.jpg"),
+    brick: textureLoader.load("../../assets/building-brick.jpg"),
+    industrial: textureLoader.load("../../assets/building-industrial.jpg"),
+    night: textureLoader.load("../../assets/building-night.jpg"),
+  };
   if (selectedMap.nature) {
     sceneVideo = document.createElement("video");
     sceneVideo.src = "../../assets/strike-remotion-scene.mp4";
@@ -616,12 +626,35 @@ function loadProjectTextures() {
     sceneVideo.preload = "auto";
     sceneVideo.play().catch(() => {});
     sceneVideoTexture = new THREE.VideoTexture(sceneVideo);
+  } else {
+    cityVideo = document.createElement("video");
+    cityVideo.src = "../../assets/strike-city-scene.mp4";
+    cityVideo.muted = true;
+    cityVideo.loop = true;
+    cityVideo.playsInline = true;
+    cityVideo.autoplay = true;
+    cityVideo.preload = "auto";
+    cityVideo.play().catch(() => {});
+    cityVideoTexture = new THREE.VideoTexture(cityVideo);
   }
   enemyTexture = enemyTextures[0];
-  [scenicTexture, sceneVideoTexture, ...Object.values(enemyFrames).flat()].filter(Boolean).forEach((texture) => {
+  [scenicTexture, sceneVideoTexture, cityVideoTexture, ...Object.values(enemyFrames).flat(), ...Object.values(buildingFacades)].filter(Boolean).forEach((texture) => {
     if (colorSpace) texture.colorSpace = colorSpace;
     texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
   });
+}
+
+// Pick the facade texture that matches the current map's mood.
+function getFacadeTexture() {
+  const key = selectedMap.name;
+  if (key === "夜间工厂" || key === "雨夜港区") return buildingFacades.night;
+  if (key === "集装箱仓库" || key === "山谷采石场") return buildingFacades.industrial;
+  if (key === "沙漠仓库" || key === "远距靶场") return buildingFacades.concrete;
+  return buildingFacades.brick;
+}
+
+function isNightMap() {
+  return selectedMap.name === "夜间工厂" || selectedMap.name === "雨夜港区";
 }
 
 function createGroundMaterial() {
@@ -880,19 +913,19 @@ function createArena() {
   ];
   wallData.forEach((data) => addBox(data, wallMat, false));
 
-  const blocks = [
-    [-16, 1.4, -15, 8, 2.8, 4],
-    [12, 1.6, -13, 5, 3.2, 8],
-    [0, 1.25, 0, 9, 2.5, 3],
-    [-20, 1.1, 12, 4, 2.2, 8],
-    [18, 1.1, 14, 10, 2.2, 3],
-    [0, 2.2, 24, 7, 4.4, 5],
-    [27, 1.5, -26, 4, 3, 9],
-    [-30, 1.5, -24, 6, 3, 5],
+  // Realistic textured buildings (photoreal facade + architectural detail).
+  const buildings = [
+    [-16, -15, 8, 5, 7.5],
+    [12, -13, 6, 8, 9],
+    [0, 0, 9, 4, 6],
+    [-20, 12, 5, 8, 8],
+    [18, 14, 10, 4, 6.5],
+    [0, 24, 7, 5, 10],
+    [27, -26, 5, 9, 8.5],
+    [-30, -24, 6, 6, 7],
   ];
-  blocks.forEach((data, index) => {
-    const mesh = addBox(data, index % 3 === 0 ? accentMat : wallMat, true);
-    if (index % 3 === 0) addContainerRibs(mesh, data);
+  buildings.forEach(([x, z, w, d, h], index) => {
+    createBuilding(x, z, w, d, h, index);
   });
 
   for (let i = 0; i < 20; i += 1) {
@@ -915,7 +948,37 @@ function createArena() {
 }
 
 function createCinematicBackdrop() {
-  if (!selectedMap.nature) return;
+  if (!selectedMap.nature) {
+    // Urban maps: distant animated city skyline (Remotion-rendered video).
+    if (!cityVideoTexture) return;
+    const cityBackdrop = new THREE.Mesh(
+      new THREE.PlaneGeometry(110, 62),
+      new THREE.MeshBasicMaterial({
+        map: cityVideoTexture,
+        color: 0xffffff,
+        transparent: true,
+        opacity: isNightMap() ? 0.96 : 0.82,
+        depthWrite: false,
+      }),
+    );
+    cityBackdrop.position.set(0, 20, -46);
+    cityBackdrop.renderOrder = -20;
+    scene.add(cityBackdrop);
+
+    const cityVeil = new THREE.Mesh(
+      new THREE.PlaneGeometry(110, 62),
+      new THREE.MeshBasicMaterial({
+        color: isNightMap() ? 0x050810 : 0x1a2030,
+        transparent: true,
+        opacity: isNightMap() ? 0.12 : 0.2,
+        depthWrite: false,
+      }),
+    );
+    cityVeil.position.set(0, 20, -45.8);
+    cityVeil.renderOrder = -19;
+    scene.add(cityVeil);
+    return;
+  }
   const backdrop = new THREE.Mesh(
     new THREE.PlaneGeometry(96, 54),
     new THREE.MeshBasicMaterial({
@@ -992,6 +1055,141 @@ function addContainerRibs(mesh, [x, y, z, sx, sy, sz]) {
     );
     rib.castShadow = true;
     scene.add(rib);
+  }
+}
+
+// Deterministic PRNG so building details are stable per building.
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// One facade texture tile represents roughly this many world units.
+const FACADE_TILE = 8;
+
+function createBuilding(x, z, w, d, h, index) {
+  const facade = getFacadeTexture();
+  const night = isNightMap();
+
+  const makeFacadeMat = (sideWidth) => {
+    const tex = facade.clone();
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(Math.max(0.5, sideWidth / FACADE_TILE), Math.max(0.5, h / FACADE_TILE));
+    tex.needsUpdate = true;
+    // Refresh the clone once the source image finishes loading.
+    if (facade.image && facade.image.complete) {
+      tex.needsUpdate = true;
+    } else if (facade.image && facade.image.addEventListener) {
+      facade.image.addEventListener("load", () => {
+        tex.needsUpdate = true;
+      }, { once: true });
+    }
+    const mat = new THREE.MeshStandardMaterial({
+      map: tex,
+      roughness: 0.88,
+      metalness: 0.05,
+    });
+    if (night) {
+      mat.emissive = new THREE.Color(0xffffff);
+      mat.emissiveMap = tex;
+      mat.emissiveIntensity = 0.5;
+    }
+    return mat;
+  };
+
+  const matFrontBack = makeFacadeMat(w); // ±z faces span width w
+  const matLeftRight = makeFacadeMat(d); // ±x faces span width d
+  const roofMat = makeMaterial(0x23262a, 0.92, 0.04);
+  const bottomMat = makeMaterial(0x14161a, 0.95, 0.02);
+
+  // BoxGeometry material order: [+x, -x, +y, -y, +z, -z].
+  const materials = [matLeftRight, matLeftRight, roofMat, bottomMat, matFrontBack, matFrontBack];
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), materials);
+  mesh.position.set(x, h / 2, z);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+
+  obstacles.push({
+    minX: x - w / 2 - player.radius,
+    maxX: x + w / 2 + player.radius,
+    minZ: z - d / 2 - player.radius,
+    maxZ: z + d / 2 + player.radius,
+  });
+
+  const rng = mulberry32(index * 7919 + 13);
+  const concreteMat = makeMaterial(selectedMap.concrete, 0.85, 0.05);
+  const darkMat = makeMaterial(0x1a1d21, 0.8, 0.1);
+
+  // Base plinth (slightly wider, dark).
+  const plinth = new THREE.Mesh(new THREE.BoxGeometry(w + 0.3, 0.5, d + 0.3), darkMat);
+  plinth.position.set(x, 0.25, z);
+  plinth.castShadow = true;
+  plinth.receiveShadow = true;
+  scene.add(plinth);
+
+  // Roof parapet (frame around the top edge).
+  const parapetH = 0.35;
+  const t = 0.12;
+  [
+    [x, h + parapetH / 2, z - d / 2 + t / 2, w + t * 2, parapetH, t],
+    [x, h + parapetH / 2, z + d / 2 - t / 2, w + t * 2, parapetH, t],
+    [x - w / 2 + t / 2, h + parapetH / 2, z, t, parapetH, d],
+    [x + w / 2 - t / 2, h + parapetH / 2, z, t, parapetH, d],
+  ].forEach((p) => addBox(p, concreteMat, false));
+
+  // Rooftop clutter (AC units / water tanks).
+  const roofItems = 1 + Math.floor(rng() * 3);
+  for (let i = 0; i < roofItems; i += 1) {
+    const rw = 0.8 + rng() * 1.2;
+    const rh = 0.5 + rng() * 0.7;
+    const rd = 0.8 + rng() * 1.2;
+    const rx = x + (rng() - 0.5) * Math.max(0.5, w - rw - 0.6);
+    const rz = z + (rng() - 0.5) * Math.max(0.5, d - rd - 0.6);
+    const unit = new THREE.Mesh(new THREE.BoxGeometry(rw, rh, rd), rng() > 0.5 ? concreteMat : darkMat);
+    unit.position.set(rx, h + rh / 2, rz);
+    unit.castShadow = true;
+    scene.add(unit);
+  }
+
+  // Antenna on tall buildings.
+  if (h > 8 && rng() > 0.4) {
+    const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.05, 2.2, 8), darkMat);
+    antenna.position.set(x + (rng() - 0.5) * w * 0.5, h + 1.1, z + (rng() - 0.5) * d * 0.5);
+    antenna.castShadow = true;
+    scene.add(antenna);
+  }
+
+  // Wall-mounted AC units on the front/back faces.
+  const rows = Math.floor(h / 2.5);
+  for (let i = 0; i < rows; i += 1) {
+    if (rng() > 0.6) continue;
+    const side = rng() > 0.5 ? 1 : -1;
+    const ay = 1.6 + i * 2.4 + rng() * 0.5;
+    if (ay > h - 0.9) continue;
+    const ac = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.45, 0.32), concreteMat);
+    ac.position.set(x + (rng() - 0.5) * (w - 1.2), ay, z + side * (d / 2 + 0.18));
+    ac.castShadow = true;
+    scene.add(ac);
+  }
+
+  // Vertical drain pipe on a corner.
+  if (rng() > 0.35) {
+    const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, h, 8), darkMat);
+    pipe.position.set(
+      x + (rng() > 0.5 ? 1 : -1) * (w / 2 + 0.06),
+      h / 2,
+      z + (rng() > 0.5 ? 1 : -1) * (d / 2 - 0.3),
+    );
+    pipe.castShadow = true;
+    scene.add(pipe);
   }
 }
 
