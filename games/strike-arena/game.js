@@ -17,6 +17,7 @@ const ui = {
   reload: document.querySelector("#reloadBtn"),
   healthFill: document.querySelector("#healthFill"),
   healthText: document.querySelector("#healthText"),
+  staminaFill: document.querySelector("#staminaFill"),
   hitmarker: document.querySelector("#hitmarker"),
   damage: document.querySelector("#damageVignette"),
   radar: document.querySelector("#radar"),
@@ -91,6 +92,61 @@ let gameTime = 0;
 let sensitivity = 1;
 let masterVolume = 0.45;
 let audioContext = null;
+
+// --- CF/CS realism: movement state ---
+let crouching = false;
+let crouchLerp = 0; // 0 = standing, 1 = fully crouched
+let verticalVelocity = 0;
+let grounded = true;
+let stamina = 100;
+let sprinting = false;
+let headBobPhase = 0;
+let headBobAmount = 0;
+let lastFootstep = 0;
+const FOOTSTEP_INTERVAL_WALK = 0.42;
+const FOOTSTEP_INTERVAL_SPRINT = 0.3;
+
+// --- CF/CS realism: ADS (aim down sights) ---
+let adsActive = false;
+let adsLerp = 0; // 0 = hip, 1 = fully aimed
+const ADS_FOV_ZOOM = 52;
+const HIP_FOV = 74;
+
+// --- CF/CS realism: recoil pattern (deterministic like CS) ---
+let recoilIndex = 0;
+const RECOIL_PATTERN_LENGTH = 32;
+const recoilPattern = [];
+// Generate a spray pattern: initial climb, then S-curve horizontal drift.
+for (let i = 0; i < RECOIL_PATTERN_LENGTH; i++) {
+  const t = i / RECOIL_PATTERN_LENGTH;
+  const vertical = t < 0.25 ? t * 4 : t < 0.6 ? 1 + (t - 0.25) * 0.6 : 1.21 - (t - 0.6) * 0.3;
+  const horizontal = Math.sin(t * Math.PI * 3.2) * (0.3 + t * 0.5);
+  recoilPattern.push({ v: vertical, h: horizontal });
+}
+
+// --- CF/CS realism: weapon animation state ---
+let weaponSwayX = 0;
+let weaponSwayY = 0;
+let weaponBobX = 0;
+let weaponBobY = 0;
+let reloadAnimPhase = 0; // 0=idle, 1=mag out, 2=mag in, 3=bolt
+let reloadAnimTimer = 0;
+let weaponKickZ = 0;
+let lastMouseX = 0;
+let lastMouseY = 0;
+
+// --- CF/CS realism: shell casing pool ---
+const shellPool = [];
+let shellCursor = 0;
+const SHELL_POOL_SIZE = 12;
+
+// --- CF/CS realism: muzzle flash ---
+let muzzleFlashMesh = null;
+let muzzleFlashTimer = 0;
+
+// --- CF/CS realism: bullet holes ---
+const bulletHoles = [];
+const MAX_BULLET_HOLES = 40;
 
 const bots = [];
 const botMeshes = [];
@@ -477,6 +533,38 @@ function playReloadSound() {
   window.setTimeout(() => playTone(420, 0.08, "triangle", 0.1), 210);
 }
 
+function playFootstep() {
+  if (!audioContext || masterVolume <= 0) return;
+  const now = audioContext.currentTime;
+  const noiseBuffer = getShotNoiseBuffer();
+  // Low thump (boot on ground).
+  const src = audioContext.createBufferSource();
+  src.buffer = noiseBuffer;
+  const filter = audioContext.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.frequency.setValueAtTime(280 + Math.random() * 120, now);
+  filter.frequency.exponentialRampToValueAtTime(80, now + 0.08);
+  const gain = audioContext.createGain();
+  const vol = (sprinting ? 0.14 : 0.08) * masterVolume;
+  gain.gain.setValueAtTime(vol, now);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+  src.connect(filter).connect(gain).connect(audioContext.destination);
+  src.start(now);
+  src.stop(now + 0.1);
+  // Subtle high scrape.
+  const src2 = audioContext.createBufferSource();
+  src2.buffer = noiseBuffer;
+  const hpf = audioContext.createBiquadFilter();
+  hpf.type = "highpass";
+  hpf.frequency.setValueAtTime(2200 + Math.random() * 800, now);
+  const gain2 = audioContext.createGain();
+  gain2.gain.setValueAtTime(vol * 0.3, now);
+  gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
+  src2.connect(hpf).connect(gain2).connect(audioContext.destination);
+  src2.start(now);
+  src2.stop(now + 0.05);
+}
+
 function pushKillfeed(message) {
   if (!ui.killfeed) return;
   const item = document.createElement("span");
@@ -538,29 +626,91 @@ function loadProjectTextures() {
 
 function createGroundMaterial() {
   const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 256;
+  canvas.width = 512;
+  canvas.height = 512;
   const ctx = canvas.getContext("2d");
-  ctx.fillStyle = `#${selectedMap.ground.toString(16).padStart(6, "0")}`;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  for (let i = 0; i < 1800; i += 1) {
-    const shade = 34 + Math.floor(Math.random() * 44);
-    ctx.fillStyle = `rgba(${shade}, ${shade}, ${shade}, ${0.05 + Math.random() * 0.12})`;
-    ctx.fillRect(Math.random() * 256, Math.random() * 256, 1 + Math.random() * 3, 1 + Math.random() * 3);
-  }
-  for (let i = 0; i < 24; i += 1) {
-    ctx.strokeStyle = `rgba(255,255,255,${0.025 + Math.random() * 0.05})`;
+  const baseColor = `#${selectedMap.ground.toString(16).padStart(6, "0")}`;
+  ctx.fillStyle = baseColor;
+  ctx.fillRect(0, 0, 512, 512);
+
+  // Large terrain patches (color variation).
+  for (let i = 0; i < 40; i++) {
+    const shade = Math.random() > 0.5 ? 20 : -20;
+    const r = parseInt(baseColor.slice(1, 3), 16) + shade + Math.floor(Math.random() * 16 - 8);
+    const g = parseInt(baseColor.slice(3, 5), 16) + shade + Math.floor(Math.random() * 16 - 8);
+    const b = parseInt(baseColor.slice(5, 7), 16) + shade + Math.floor(Math.random() * 16 - 8);
+    ctx.fillStyle = `rgba(${Math.max(0, r)}, ${Math.max(0, g)}, ${Math.max(0, b)}, ${0.15 + Math.random() * 0.2})`;
     ctx.beginPath();
-    ctx.moveTo(Math.random() * 256, Math.random() * 256);
-    ctx.lineTo(Math.random() * 256, Math.random() * 256);
+    ctx.ellipse(Math.random() * 512, Math.random() * 512, 20 + Math.random() * 60, 15 + Math.random() * 40, Math.random() * Math.PI, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Medium grain / pebbles.
+  for (let i = 0; i < 3000; i++) {
+    const shade = 28 + Math.floor(Math.random() * 60);
+    ctx.fillStyle = `rgba(${shade}, ${shade}, ${shade}, ${0.04 + Math.random() * 0.1})`;
+    const size = 1 + Math.random() * 3;
+    ctx.fillRect(Math.random() * 512, Math.random() * 512, size, size);
+  }
+
+  // Fine noise grain.
+  for (let i = 0; i < 6000; i++) {
+    const v = Math.random() * 255;
+    ctx.fillStyle = `rgba(${v}, ${v}, ${v}, ${0.02 + Math.random() * 0.04})`;
+    ctx.fillRect(Math.random() * 512, Math.random() * 512, 1, 1);
+  }
+
+  // Cracks and lines.
+  for (let i = 0; i < 36; i++) {
+    ctx.strokeStyle = `rgba(0, 0, 0, ${0.06 + Math.random() * 0.12})`;
+    ctx.lineWidth = 0.5 + Math.random() * 1.5;
+    ctx.beginPath();
+    let x = Math.random() * 512;
+    let y = Math.random() * 512;
+    ctx.moveTo(x, y);
+    for (let j = 0; j < 4; j++) {
+      x += (Math.random() - 0.5) * 80;
+      y += (Math.random() - 0.5) * 80;
+      ctx.lineTo(x, y);
+    }
     ctx.stroke();
   }
+
+  // Subtle highlights (worn spots).
+  for (let i = 0; i < 12; i++) {
+    ctx.fillStyle = `rgba(255, 255, 255, ${0.02 + Math.random() * 0.04})`;
+    ctx.beginPath();
+    ctx.ellipse(Math.random() * 512, Math.random() * 512, 10 + Math.random() * 30, 8 + Math.random() * 20, Math.random() * Math.PI, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   const texture = new THREE.CanvasTexture(canvas);
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(14, 14);
+  texture.repeat.set(18, 18);
+  texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+  // Bump map for surface relief.
+  const bumpCanvas = document.createElement("canvas");
+  bumpCanvas.width = 256;
+  bumpCanvas.height = 256;
+  const bCtx = bumpCanvas.getContext("2d");
+  bCtx.fillStyle = "#808080";
+  bCtx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 2000; i++) {
+    const v = 100 + Math.floor(Math.random() * 56);
+    bCtx.fillStyle = `rgb(${v}, ${v}, ${v})`;
+    bCtx.fillRect(Math.random() * 256, Math.random() * 256, 1 + Math.random() * 2, 1 + Math.random() * 2);
+  }
+  const bumpTexture = new THREE.CanvasTexture(bumpCanvas);
+  bumpTexture.wrapS = THREE.RepeatWrapping;
+  bumpTexture.wrapT = THREE.RepeatWrapping;
+  bumpTexture.repeat.set(18, 18);
+
   return new THREE.MeshStandardMaterial({
     map: texture,
+    bumpMap: bumpTexture,
+    bumpScale: 0.3,
     color: 0xffffff,
     roughness: 0.92,
     metalness: 0.04,
@@ -606,22 +756,73 @@ function initScene() {
   ammo = selectedWeapon.mag;
   reserve = Math.round(selectedWeapon.reserve * selectedMode.reserveScale);
 
-  const hemi = new THREE.HemisphereLight(0xd9e6ff, selectedMap.ground, 1.05);
+  const hemi = new THREE.HemisphereLight(
+    selectedMap.nature ? 0xb8d4e8 : 0xd9e6ff,
+    selectedMap.ground,
+    selectedMap.nature ? 0.85 : 1.05,
+  );
   scene.add(hemi);
 
-  const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+  // Ambient fill to prevent pure black shadows.
+  const ambient = new THREE.AmbientLight(0x1a2030, 0.35);
+  scene.add(ambient);
+
+  const sun = new THREE.DirectionalLight(0xfff4e0, 2.4);
   sun.position.set(-12, 24, 10);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.camera.left = -40;
-  sun.shadow.camera.right = 40;
-  sun.shadow.camera.top = 40;
-  sun.shadow.camera.bottom = -40;
+  sun.shadow.camera.left = -44;
+  sun.shadow.camera.right = 44;
+  sun.shadow.camera.top = 44;
+  sun.shadow.camera.bottom = -44;
+  sun.shadow.camera.near = 0.5;
+  sun.shadow.camera.far = 80;
+  sun.shadow.bias = -0.0004;
+  sun.shadow.normalBias = 0.02;
   scene.add(sun);
+
+  // Secondary bounce light (cool fill from opposite side).
+  const bounce = new THREE.DirectionalLight(0x8ab4d4, 0.5);
+  bounce.position.set(14, 8, -12);
+  scene.add(bounce);
 
   const cyan = new THREE.PointLight(selectedMap.glow, 58, 30);
   cyan.position.set(8, 5, -8);
   scene.add(cyan);
+
+  // Gradient sky dome.
+  const skyGeo = new THREE.SphereGeometry(280, 32, 16);
+  const skyMat = new THREE.ShaderMaterial({
+    uniforms: {
+      topColor: { value: new THREE.Color(selectedMap.nature ? 0x1a3050 : 0x0a1428) },
+      bottomColor: { value: new THREE.Color(selectedMap.sky) },
+      offset: { value: 20 },
+      exponent: { value: 0.5 },
+    },
+    vertexShader: `
+      varying vec3 vWorldPosition;
+      void main() {
+        vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+        vWorldPosition = worldPosition.xyz;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 topColor;
+      uniform vec3 bottomColor;
+      uniform float offset;
+      uniform float exponent;
+      varying vec3 vWorldPosition;
+      void main() {
+        float h = normalize(vWorldPosition + offset).y;
+        gl_FragColor = vec4(mix(bottomColor, topColor, max(pow(max(h, 0.0), exponent), 0.0)), 1.0);
+      }
+    `,
+    side: THREE.BackSide,
+    depthWrite: false,
+  });
+  const sky = new THREE.Mesh(skyGeo, skyMat);
+  scene.add(sky);
 
   applyScenarioText();
   createArena();
@@ -1119,43 +1320,264 @@ function createNatureLayer() {
 
 function createWeapon() {
   weapon = new THREE.Group();
-  const gunMat = makeMaterial(0x10151d, 0.3, 0.65);
-  const gripMat = makeMaterial(0x222c38, 0.5, 0.2);
-  const glowMat = new THREE.MeshBasicMaterial({ color: selectedMap.glow });
   const isSniper = selectedWeapon === WEAPONS.sniper;
   const isSmg = selectedWeapon === WEAPONS.smg;
 
-  const body = new THREE.Mesh(new THREE.BoxGeometry(isSniper ? 0.3 : 0.34, 0.22, isSniper ? 1.45 : isSmg ? 0.82 : 1.1), gunMat);
-  body.position.set(0.32, -0.28, -0.72);
-  weapon.add(body);
+  // PBR materials for realistic gun finish.
+  const receiverMat = new THREE.MeshStandardMaterial({
+    color: 0x1a1e24, roughness: 0.28, metalness: 0.82,
+  });
+  const barrelMat = new THREE.MeshStandardMaterial({
+    color: 0x0e1114, roughness: 0.22, metalness: 0.92,
+  });
+  const polymerMat = new THREE.MeshStandardMaterial({
+    color: 0x232a32, roughness: 0.72, metalness: 0.06,
+  });
+  const railMat = new THREE.MeshStandardMaterial({
+    color: 0x2c333b, roughness: 0.38, metalness: 0.7,
+  });
+  const accentMat = new THREE.MeshStandardMaterial({
+    color: selectedMap.glow, roughness: 0.4, metalness: 0.3,
+    emissive: selectedMap.glow, emissiveIntensity: 0.3,
+  });
+  const magMat = new THREE.MeshStandardMaterial({
+    color: 0x14181c, roughness: 0.55, metalness: 0.4,
+  });
+  const lensMat = new THREE.MeshStandardMaterial({
+    color: 0x1a3a5c, roughness: 0.05, metalness: 0.1,
+    emissive: 0x0a2a4a, emissiveIntensity: 0.4,
+  });
 
-  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, isSniper ? 1.12 : 0.78, 18), gunMat);
+  const bodyLen = isSniper ? 1.5 : isSmg ? 0.78 : 1.08;
+  const bodyH = isSniper ? 0.16 : 0.19;
+
+  // Upper receiver (main body).
+  const upper = new THREE.Mesh(new THREE.BoxGeometry(0.072, bodyH, bodyLen), receiverMat);
+  upper.position.set(0, 0.02, -bodyLen * 0.42);
+  weapon.add(upper);
+
+  // Lower receiver.
+  const lower = new THREE.Mesh(new THREE.BoxGeometry(0.066, 0.09, bodyLen * 0.72), receiverMat);
+  lower.position.set(0, -0.08, -bodyLen * 0.3);
+  weapon.add(lower);
+
+  // Barrel with tapered profile.
+  const barrelLen = isSniper ? 1.2 : isSmg ? 0.52 : 0.72;
+  const barrel = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.018, 0.024, barrelLen, 16),
+    barrelMat,
+  );
   barrel.rotation.x = Math.PI / 2;
-  barrel.position.set(0.32, -0.23, isSniper ? -1.72 : -1.48);
+  barrel.position.set(0, 0.025, -bodyLen - barrelLen * 0.42);
   weapon.add(barrel);
 
-  if (isSniper) {
-    const scope = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.5, 24), gunMat);
-    scope.rotation.z = Math.PI / 2;
-    scope.position.set(0.32, -0.08, -0.8);
-    weapon.add(scope);
+  // Barrel shroud / handguard with ventilation slots.
+  const shroudLen = isSniper ? 0.9 : isSmg ? 0.44 : 0.6;
+  const shroud = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.038, 0.042, shroudLen, 12),
+    railMat,
+  );
+  shroud.rotation.x = Math.PI / 2;
+  shroud.position.set(0, 0.02, -bodyLen * 0.72 - shroudLen * 0.3);
+  weapon.add(shroud);
+
+  // Muzzle device (flash hider / suppressor).
+  const muzzleLen = isSniper ? 0.18 : 0.1;
+  const muzzle = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.026, 0.022, muzzleLen, 12),
+    barrelMat,
+  );
+  muzzle.rotation.x = Math.PI / 2;
+  muzzle.position.set(0, 0.025, -bodyLen - barrelLen * 0.86);
+  weapon.add(muzzle);
+
+  // Picatinny top rail.
+  const rail = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.018, bodyLen * 0.86), railMat);
+  rail.position.set(0, 0.11, -bodyLen * 0.4);
+  weapon.add(rail);
+  // Rail slots (visual detail).
+  for (let i = 0; i < 8; i++) {
+    const slot = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.006, 0.012), barrelMat);
+    slot.position.set(0, 0.12, -bodyLen * 0.15 - i * bodyLen * 0.085);
+    weapon.add(slot);
   }
 
-  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.42, 0.22), gripMat);
-  grip.position.set(0.28, -0.58, -0.55);
-  grip.rotation.x = -0.22;
+  // Front sight post.
+  const frontSight = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.04, 0.008), receiverMat);
+  frontSight.position.set(0, 0.14, -bodyLen - barrelLen * 0.3);
+  weapon.add(frontSight);
+  const frontSightBase = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.02, 0.02), receiverMat);
+  frontSightBase.position.set(0, 0.12, -bodyLen - barrelLen * 0.3);
+  weapon.add(frontSightBase);
+
+  // Rear sight / optic.
+  if (isSniper) {
+    // Scope with tube, objective lens, eyepiece, turrets.
+    const scopeTube = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.52, 20), barrelMat);
+    scopeTube.rotation.x = Math.PI / 2;
+    scopeTube.position.set(0, 0.17, -bodyLen * 0.38);
+    weapon.add(scopeTube);
+    const objective = new THREE.Mesh(new THREE.CylinderGeometry(0.044, 0.036, 0.1, 20), barrelMat);
+    objective.rotation.x = Math.PI / 2;
+    objective.position.set(0, 0.17, -bodyLen * 0.62);
+    weapon.add(objective);
+    const objectiveLens = new THREE.Mesh(new THREE.CircleGeometry(0.038, 20), lensMat);
+    objectiveLens.position.set(0, 0.17, -bodyLen * 0.67);
+    weapon.add(objectiveLens);
+    const eyepiece = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.03, 0.08, 20), polymerMat);
+    eyepiece.rotation.x = Math.PI / 2;
+    eyepiece.position.set(0, 0.17, -bodyLen * 0.1);
+    weapon.add(eyepiece);
+    // Turrets (windage + elevation).
+    const turret1 = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.04, 12), barrelMat);
+    turret1.position.set(0, 0.21, -bodyLen * 0.38);
+    weapon.add(turret1);
+    const turret2 = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.035, 12), barrelMat);
+    turret2.rotation.z = Math.PI / 2;
+    turret2.position.set(0.035, 0.17, -bodyLen * 0.38);
+    weapon.add(turret2);
+    // Scope rings.
+    for (const zOff of [-0.18, 0.12]) {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.036, 0.008, 8, 20), railMat);
+      ring.position.set(0, 0.17, -bodyLen * 0.38 + zOff);
+      weapon.add(ring);
+    }
+  } else {
+    // Iron rear sight.
+    const rearSight = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.032, 0.012), receiverMat);
+    rearSight.position.set(0, 0.135, -bodyLen * 0.08);
+    weapon.add(rearSight);
+    const rearAperture = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.018, 0.014), barrelMat);
+    rearAperture.position.set(0, 0.14, -bodyLen * 0.08);
+    weapon.add(rearAperture);
+  }
+
+  // Pistol grip (ergonomic angle).
+  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.14, 0.06), polymerMat);
+  grip.position.set(0, -0.16, -bodyLen * 0.12);
+  grip.rotation.x = -0.32;
   weapon.add(grip);
+  // Grip texture ridges.
+  for (let i = 0; i < 4; i++) {
+    const ridge = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.006, 0.004), barrelMat);
+    ridge.position.set(0, -0.12 - i * 0.028, -bodyLen * 0.12 + 0.032);
+    ridge.rotation.x = -0.32;
+    weapon.add(ridge);
+  }
 
-  const rail = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.035, 0.54), glowMat);
-  rail.position.set(0.32, -0.13, -0.85);
-  weapon.add(rail);
+  // Trigger guard + trigger.
+  const trigGuard = new THREE.Mesh(new THREE.TorusGeometry(0.028, 0.005, 6, 12, Math.PI), receiverMat);
+  trigGuard.rotation.y = Math.PI / 2;
+  trigGuard.rotation.z = Math.PI;
+  trigGuard.position.set(0, -0.11, -bodyLen * 0.22);
+  weapon.add(trigGuard);
+  const trigger = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.024, 0.008), barrelMat);
+  trigger.position.set(0, -0.1, -bodyLen * 0.22);
+  trigger.rotation.x = 0.2;
+  weapon.add(trigger);
 
-  muzzleLight = new THREE.PointLight(selectedWeapon.tracer, 0, 7);
-  muzzleLight.position.set(0.32, -0.22, isSniper ? -2.16 : -1.86);
+  // Magazine (curved for carbine/smg, straight for sniper).
+  const magCurve = isSniper ? 0 : 0.12;
+  const mag = new THREE.Mesh(
+    new THREE.BoxGeometry(0.032, isSniper ? 0.14 : 0.18, isSmg ? 0.04 : 0.055),
+    magMat,
+  );
+  mag.position.set(0, -0.2, -bodyLen * 0.34);
+  mag.rotation.x = -0.08 - magCurve;
+  weapon.add(mag);
+  // Magazine base plate.
+  const magBase = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.012, 0.06), barrelMat);
+  magBase.position.set(0, -0.29, -bodyLen * 0.34 + magCurve * 0.3);
+  weapon.add(magBase);
+
+  // Stock (adjustable tactical stock).
+  if (!isSmg) {
+    const stockTube = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.3, 10), receiverMat);
+    stockTube.rotation.x = Math.PI / 2;
+    stockTube.position.set(0, 0.01, 0.18);
+    weapon.add(stockTube);
+    const stockPad = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.1, 0.04), polymerMat);
+    stockPad.position.set(0, -0.01, 0.34);
+    weapon.add(stockPad);
+    const stockCheek = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.03, 0.14), polymerMat);
+    stockCheek.position.set(0, 0.05, 0.26);
+    weapon.add(stockCheek);
+  } else {
+    // Compact folding stock for SMG.
+    const stockArm = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.012, 0.22), receiverMat);
+    stockArm.position.set(0.025, -0.04, 0.14);
+    weapon.add(stockArm);
+    const stockEnd = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.06, 0.02), polymerMat);
+    stockEnd.position.set(0.025, -0.04, 0.26);
+    weapon.add(stockEnd);
+  }
+
+  // Foregrip (angled tactical grip).
+  if (!isSniper) {
+    const foregrip = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.018, 0.08, 10), polymerMat);
+    foregrip.position.set(0, -0.06, -bodyLen * 0.68);
+    foregrip.rotation.x = 0.3;
+    weapon.add(foregrip);
+  }
+
+  // Charging handle.
+  const chargeHandle = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.012, 0.025), barrelMat);
+  chargeHandle.position.set(0, 0.08, -bodyLen * 0.02);
+  weapon.add(chargeHandle);
+
+  // Ejection port.
+  const ejPort = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.03, 0.05), barrelMat);
+  ejPort.position.set(0.038, 0.02, -bodyLen * 0.3);
+  weapon.add(ejPort);
+
+  // Accent light strip (tactical indicator).
+  const indicator = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.006, 0.06), accentMat);
+  indicator.position.set(0.038, 0.06, -bodyLen * 0.5);
+  weapon.add(indicator);
+
+  // Muzzle flash light.
+  muzzleLight = new THREE.PointLight(selectedWeapon.tracer, 0, 9);
+  muzzleLight.position.set(0, 0.025, -bodyLen - barrelLen * 0.9);
   weapon.add(muzzleLight);
+
+  // Muzzle flash mesh (cross-shaped quad, hidden by default).
+  const flashMat = new THREE.MeshBasicMaterial({
+    color: selectedWeapon.tracer,
+    transparent: true,
+    opacity: 0,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+  const flashGeo1 = new THREE.PlaneGeometry(0.14, 0.04);
+  const flashGeo2 = new THREE.PlaneGeometry(0.04, 0.14);
+  muzzleFlashMesh = new THREE.Group();
+  const f1 = new THREE.Mesh(flashGeo1, flashMat);
+  const f2 = new THREE.Mesh(flashGeo2, flashMat.clone());
+  const f3 = new THREE.Mesh(flashGeo1, flashMat.clone());
+  f3.rotation.y = Math.PI / 2;
+  muzzleFlashMesh.add(f1, f2, f3);
+  muzzleFlashMesh.position.set(0, 0.025, -bodyLen - barrelLen * 0.92);
+  muzzleFlashMesh.visible = false;
+  weapon.add(muzzleFlashMesh);
+
+  // Position weapon in view (hip-fire default).
+  weapon.position.set(0.24, -0.22, -0.42);
+  weapon.rotation.set(0, 0.02, 0);
 
   camera.add(weapon);
   scene.add(camera);
+
+  // Initialize shell casing pool.
+  const shellGeo = new THREE.CylinderGeometry(0.006, 0.006, 0.028, 8);
+  const shellMat = new THREE.MeshStandardMaterial({ color: 0xc8a832, roughness: 0.3, metalness: 0.85 });
+  for (let i = 0; i < SHELL_POOL_SIZE; i++) {
+    const shell = new THREE.Mesh(shellGeo, shellMat.clone());
+    shell.visible = false;
+    shell.frustumCulled = false;
+    scene.add(shell);
+    shellPool.push({ mesh: shell, vel: new THREE.Vector3(), life: 0, rotVel: new THREE.Vector3() });
+  }
 }
 
 function spawnWave() {
@@ -1328,6 +1750,9 @@ function onMouseMove(event) {
   yaw -= event.movementX * 0.0022 * sensitivity;
   pitch -= event.movementY * 0.002 * sensitivity;
   pitch = Math.max(-1.25, Math.min(1.18, pitch));
+  // Track mouse velocity for weapon sway.
+  lastMouseX = event.movementX;
+  lastMouseY = event.movementY;
 }
 
 function onMouseDown(event) {
@@ -1335,6 +1760,8 @@ function onMouseDown(event) {
   if (event.button === 0) {
     firing = true;
     shoot();
+  } else if (event.button === 2) {
+    adsActive = true;
   }
 }
 
@@ -1350,15 +1777,36 @@ function shoot() {
   shotsFired += 1;
   fireCooldown = selectedWeapon.fireRate;
   lastShotAt = performance.now();
-  muzzleLight.intensity = selectedWeapon === WEAPONS.sniper ? 56 : 38;
-  weapon.position.z = 0.045;
-  recoilPitch += selectedWeapon.recoil + Math.random() * selectedWeapon.recoil * 0.45;
-  recoilYaw += (Math.random() - 0.5) * selectedWeapon.recoil * 0.7;
-  playShotSound();
 
+  // Muzzle flash + light.
+  muzzleLight.intensity = selectedWeapon === WEAPONS.sniper ? 64 : 42;
+  if (muzzleFlashMesh) {
+    muzzleFlashMesh.visible = true;
+    muzzleFlashMesh.rotation.z = Math.random() * Math.PI;
+    const s = 0.7 + Math.random() * 0.6;
+    muzzleFlashMesh.scale.set(s, s, s);
+    muzzleFlashTimer = 0.04;
+  }
+
+  // Weapon kick animation.
+  weaponKickZ = 0.06;
+
+  // Deterministic recoil pattern (CS-style).
+  const pattern = recoilPattern[Math.min(recoilIndex, RECOIL_PATTERN_LENGTH - 1)];
+  const recoilMult = selectedWeapon.recoil * (adsLerp > 0.5 ? 0.6 : 1);
+  recoilPitch += pattern.v * recoilMult * 0.8;
+  recoilYaw += pattern.h * recoilMult * 0.5;
+  recoilIndex = Math.min(recoilIndex + 1, RECOIL_PATTERN_LENGTH - 1);
+
+  playShotSound();
+  ejectShellCasing();
+
+  // Raycast with spread (reduced when ADS).
   raycaster.setFromCamera({ x: 0, y: 0 }, camera);
   const moving = player.velocity.lengthSq() > 0.0001;
-  const spread = (moving ? 0.014 : 0.004) + recoilPitch * 0.65;
+  const adsSpreadMod = adsLerp > 0.5 ? 0.35 : 1;
+  const crouchMod = crouchLerp > 0.5 ? 0.6 : 1;
+  const spread = ((moving ? 0.016 : 0.003) + recoilPitch * 0.55) * adsSpreadMod * crouchMod;
   raycaster.ray.direction.x += (Math.random() - 0.5) * spread;
   raycaster.ray.direction.y += (Math.random() - 0.5) * spread;
   raycaster.ray.direction.normalize();
@@ -1388,10 +1836,57 @@ function shoot() {
       }
     }
   } else {
+    // Bullet hole on ground/environment.
+    const envHits = raycaster.intersectObjects(scene.children, false);
+    const envHit = envHits.find((h) => h.object.isMesh && !botMeshes.includes(h.object) && h.object !== muzzleFlashMesh);
+    if (envHit && envHit.distance < 80) {
+      spawnBulletHole(envHit.point, envHit.face ? envHit.face.normal : UP_VECTOR);
+    }
     tmpV2.copy(camera.position).addScaledVector(raycaster.ray.direction, 38);
     spawnTracer(tmpV2, 0xffffff);
   }
   updateHud();
+}
+
+function ejectShellCasing() {
+  const shell = shellPool[shellCursor];
+  shellCursor = (shellCursor + 1) % shellPool.length;
+  // Eject from weapon's ejection port world position.
+  const worldPos = new THREE.Vector3(0.05, 0.02, -0.3);
+  weapon.localToWorld(worldPos);
+  camera.localToWorld(worldPos.sub(camera.position)).add(camera.position);
+  shell.mesh.position.copy(camera.position).add(
+    new THREE.Vector3(0.28, -0.12, -0.5).applyQuaternion(camera.quaternion),
+  );
+  shell.mesh.visible = true;
+  // Random ejection velocity (right + up + slightly back).
+  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+  const up = new THREE.Vector3(0, 1, 0);
+  shell.vel.copy(right).multiplyScalar(1.8 + Math.random() * 1.2)
+    .addScaledVector(up, 2.2 + Math.random() * 1.5)
+    .add(new THREE.Vector3(0, 0, 0.4 + Math.random() * 0.6).applyQuaternion(camera.quaternion));
+  shell.rotVel.set(Math.random() * 12, Math.random() * 12, Math.random() * 12);
+  shell.life = 1.2;
+}
+
+function spawnBulletHole(point, normal) {
+  const holeMat = new THREE.MeshBasicMaterial({
+    color: 0x0a0a0a,
+    transparent: true,
+    opacity: 0.7,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const hole = new THREE.Mesh(new THREE.CircleGeometry(0.04 + Math.random() * 0.02, 8), holeMat);
+  hole.position.copy(point).addScaledVector(normal, 0.01);
+  hole.lookAt(point.clone().add(normal));
+  scene.add(hole);
+  bulletHoles.push({ mesh: hole, life: 12 });
+  // Limit total bullet holes for performance.
+  if (bulletHoles.length > MAX_BULLET_HOLES) {
+    const old = bulletHoles.shift();
+    scene.remove(old.mesh);
+  }
 }
 
 function initPools() {
@@ -1508,7 +2003,28 @@ function reload() {
 
 function updatePlayer(delta) {
   const weight = selectedWeapon === WEAPONS.sniper ? 0.88 : selectedWeapon === WEAPONS.smg ? 1.08 : 1;
-  const speed = (keys.has("ShiftLeft") || keys.has("ShiftRight") ? 7.1 : 4.8) * weight;
+
+  // Sprint + stamina system.
+  const wantSprint = (keys.has("ShiftLeft") || keys.has("ShiftRight")) && stamina > 0;
+  const isMoving = keys.has("KeyW") || keys.has("KeyS") || keys.has("KeyA") || keys.has("KeyD");
+  sprinting = wantSprint && isMoving && !crouching && !adsActive;
+  if (sprinting) {
+    stamina = Math.max(0, stamina - delta * 28);
+  } else {
+    stamina = Math.min(100, stamina + delta * 18);
+  }
+
+  // Crouch state.
+  crouching = keys.has("ControlLeft") || keys.has("ControlRight");
+  const crouchTarget = crouching ? 1 : 0;
+  crouchLerp += (crouchTarget - crouchLerp) * Math.min(1, delta * 10);
+
+  // Movement speed (ADS slows you down like CS).
+  const adsSpeedMod = adsLerp > 0.5 ? 0.62 : 1;
+  const crouchSpeedMod = crouchLerp > 0.5 ? 0.45 : 1;
+  const sprintMod = sprinting ? 1.48 : 1;
+  const speed = 4.8 * weight * adsSpeedMod * crouchSpeedMod * sprintMod;
+
   const forward = Number(keys.has("KeyW")) - Number(keys.has("KeyS"));
   const right = Number(keys.has("KeyD")) - Number(keys.has("KeyA"));
   const move = new THREE.Vector3();
@@ -1526,9 +2042,52 @@ function updatePlayer(delta) {
     camera.position.x = next.x;
     camera.position.z = next.z;
   }
-  const bob = Math.sin(performance.now() * 0.009) * (move.lengthSq() > 0 ? 0.018 : 0.004);
-  camera.position.y = player.height + bob;
-  camera.rotation.set(pitch + recoilPitch, yaw + recoilYaw, 0);
+
+  // Jump + gravity.
+  if (keys.has("Space") && grounded) {
+    verticalVelocity = 5.2;
+    grounded = false;
+  }
+  if (!grounded) {
+    verticalVelocity -= 14.5 * delta; // gravity
+  }
+  const standHeight = player.height;
+  const crouchHeight = player.height * 0.62;
+  const targetHeight = standHeight + (crouchHeight - standHeight) * crouchLerp;
+  let currentY = camera.position.y + verticalVelocity * delta;
+  if (currentY <= targetHeight) {
+    currentY = targetHeight;
+    verticalVelocity = 0;
+    grounded = true;
+  }
+  camera.position.y = currentY;
+
+  // Head bob (CS-style, synced to movement).
+  const moveSpeed = move.length() / delta;
+  if (moveSpeed > 0.5 && grounded) {
+    const bobFreq = sprinting ? 11.5 : crouchLerp > 0.5 ? 6.5 : 8.2;
+    const bobAmp = sprinting ? 0.032 : crouchLerp > 0.5 ? 0.012 : 0.022;
+    headBobPhase += delta * bobFreq;
+    headBobAmount += (bobAmp - headBobAmount) * Math.min(1, delta * 6);
+  } else {
+    headBobAmount += (0 - headBobAmount) * Math.min(1, delta * 8);
+  }
+  const bobY = Math.sin(headBobPhase * 2) * headBobAmount;
+  const bobX = Math.cos(headBobPhase) * headBobAmount * 0.6;
+  camera.position.y += bobY;
+
+  // Footstep sounds.
+  if (moveSpeed > 0.5 && grounded) {
+    const interval = sprinting ? FOOTSTEP_INTERVAL_SPRINT : FOOTSTEP_INTERVAL_WALK;
+    lastFootstep += delta;
+    if (lastFootstep >= interval) {
+      lastFootstep = 0;
+      playFootstep();
+    }
+  }
+
+  // Apply camera rotation with recoil.
+  camera.rotation.set(pitch + recoilPitch, yaw + recoilYaw, bobX * 0.3);
 }
 
 function collides(position) {
@@ -1571,13 +2130,40 @@ function updateBots(delta) {
     toPlayer.y = 0;
     const dir = toPlayer.normalize();
     const tangent = tmpV2.set(-dir.z, 0, dir.x).multiplyScalar(bot.strafe);
-    const desired = tmpV3.copy(dir).multiplyScalar(distance > 8 ? 1 : -0.2).addScaledVector(tangent, 0.42);
+
+    // Tactical strafing: change direction periodically.
+    if (!bot.strafeTimer) bot.strafeTimer = 1.5 + Math.random() * 2;
+    bot.strafeTimer -= delta;
+    if (bot.strafeTimer <= 0) {
+      bot.strafe *= -1;
+      bot.strafeTimer = 1.2 + Math.random() * 2.5;
+      tangent.multiplyScalar(-1);
+    }
+
+    // Movement: approach if far, hold position at mid range, retreat if too close.
+    let approachFactor;
+    if (distance > 14) approachFactor = 1;
+    else if (distance > 6) approachFactor = 0.3;
+    else approachFactor = -0.4; // back off at close range
+
+    // Low health bots seek cover (move toward nearest obstacle).
+    const healthRatio = bot.health / (selectedMode.botHealth + wave * 8);
+    if (healthRatio < 0.35 && distance < 18) {
+      // Strafe more aggressively when hurt.
+      approachFactor = -0.2;
+      tangent.multiplyScalar(1.8);
+    }
+
+    // Dodge faster when recently hit.
+    const dodgeMod = bot.hitReact > 0.1 ? 1.6 : 1;
+    const desired = tmpV3.copy(dir).multiplyScalar(approachFactor).addScaledVector(tangent, 0.5 * dodgeMod);
     if (desired.lengthSq() > 0) desired.normalize();
-    const next = tmpV4.copy(bot.group.position).addScaledVector(desired, bot.speed * delta);
+    const speed = bot.speed * dodgeMod * (healthRatio < 0.35 ? 1.3 : 1);
+    const next = tmpV4.copy(bot.group.position).addScaledVector(desired, speed * delta);
     next.x = Math.max(-38, Math.min(38, next.x));
     next.z = Math.max(-38, Math.min(38, next.z));
     if (botCollides(next)) {
-      const side = tmpV5.copy(bot.group.position).addScaledVector(tangent.normalize(), bot.speed * delta * 1.8);
+      const side = tmpV5.copy(bot.group.position).addScaledVector(tangent.normalize(), speed * delta * 1.8);
       side.x = Math.max(-38, Math.min(38, side.x));
       side.z = Math.max(-38, Math.min(38, side.z));
       if (!botCollides(side)) bot.group.position.copy(side);
@@ -1589,6 +2175,12 @@ function updateBots(delta) {
     const step = Math.sin(gameTime * (8.5 + bot.speed * 1.3) + bot.speed * 3);
     bot.group.position.y = Math.abs(step) * 0.045 * movingAmount;
     bot.group.rotation.z = step * 0.035 * movingAmount;
+
+    // Crouch-like behavior at close range (lower the group slightly).
+    if (distance < 5 && movingAmount < 0.5) {
+      bot.group.position.y -= 0.15;
+    }
+
     if (bot.visual && bot.visualBaseScale) {
       const aiming = distance < 24;
       bot.fireReact = Math.max(0, bot.fireReact - delta * 7);
@@ -1618,12 +2210,29 @@ function updateBots(delta) {
       bot.visual.material.opacity = 0.98 - bot.hitReact * 0.28;
     }
 
+    // Burst fire pattern (CS-style: 2-4 shots per burst).
+    if (!bot.burstCount) bot.burstCount = 0;
+    if (!bot.burstPause) bot.burstPause = 0;
     bot.nextShot -= delta;
-    if (distance < 24 && bot.nextShot <= 0 && !lineBlocked(tmpV5.copy(bot.group.position).setY(bot.group.position.y + 1.35), camera.position)) {
+    if (bot.burstPause > 0) {
+      bot.burstPause -= delta;
+    } else if (distance < 24 && bot.nextShot <= 0 && !lineBlocked(tmpV5.copy(bot.group.position).setY(bot.group.position.y + 1.35), camera.position)) {
       bot.fireReact = 1;
-      damagePlayer(selectedMode.damage + Math.floor(wave * 0.8));
-      pushKillfeed("敌方步兵 命中 <b>你</b>");
-      bot.nextShot = 1.2 + Math.random() * 1.1;
+      // Accuracy decreases with distance and movement.
+      const accuracyMod = distance > 16 ? 0.6 : distance > 10 ? 0.8 : 1;
+      const hitChance = 0.55 * accuracyMod * (movingAmount > 0.5 ? 0.7 : 1);
+      if (Math.random() < hitChance) {
+        damagePlayer(selectedMode.damage + Math.floor(wave * 0.8));
+        pushKillfeed("敌方步兵 命中 <b>你</b>");
+      }
+      bot.burstCount += 1;
+      bot.nextShot = 0.12 + Math.random() * 0.08; // fast within burst
+      if (bot.burstCount >= 2 + Math.floor(Math.random() * 3)) {
+        // End burst, pause before next.
+        bot.burstCount = 0;
+        bot.burstPause = 0.8 + Math.random() * 1.2;
+        bot.nextShot = 0.4;
+      }
     }
   });
 
@@ -1666,16 +2275,140 @@ function updateDecals(delta) {
 }
 
 function updateWeapon(delta) {
-  muzzleLight.intensity = Math.max(0, muzzleLight.intensity - delta * 180);
-  weapon.position.z += (0 - weapon.position.z) * Math.min(1, delta * 18);
-  const recover = delta * (selectedWeapon === WEAPONS.sniper ? 0.09 : 0.18);
+  // Muzzle flash decay.
+  muzzleLight.intensity = Math.max(0, muzzleLight.intensity - delta * 220);
+  if (muzzleFlashTimer > 0) {
+    muzzleFlashTimer -= delta;
+    if (muzzleFlashTimer <= 0 && muzzleFlashMesh) {
+      muzzleFlashMesh.visible = false;
+    }
+  }
+
+  // ADS (aim down sights) lerp.
+  const adsTarget = adsActive ? 1 : 0;
+  adsLerp += (adsTarget - adsLerp) * Math.min(1, delta * 12);
+  // Smooth FOV transition.
+  const targetFov = HIP_FOV + (ADS_FOV_ZOOM - HIP_FOV) * adsLerp;
+  if (Math.abs(camera.fov - targetFov) > 0.1) {
+    camera.fov += (targetFov - camera.fov) * Math.min(1, delta * 14);
+    camera.updateProjectionMatrix();
+  }
+
+  // Weapon position: hip vs ADS.
+  const hipPos = { x: 0.24, y: -0.22, z: -0.42 };
+  const adsPos = { x: 0, y: -0.14, z: -0.36 };
+  const baseX = hipPos.x + (adsPos.x - hipPos.x) * adsLerp;
+  const baseY = hipPos.y + (adsPos.y - hipPos.y) * adsLerp;
+  const baseZ = hipPos.z + (adsPos.z - hipPos.z) * adsLerp;
+
+  // Weapon sway (follows mouse with delay, reduced when ADS).
+  const swayMod = adsLerp > 0.5 ? 0.25 : 1;
+  const targetSwayX = -lastMouseX * 0.00012 * swayMod;
+  const targetSwayY = lastMouseY * 0.0001 * swayMod;
+  weaponSwayX += (targetSwayX - weaponSwayX) * Math.min(1, delta * 5);
+  weaponSwayY += (targetSwayY - weaponSwayY) * Math.min(1, delta * 5);
+  // Idle sway (breathing).
+  const idleSwayX = Math.sin(gameTime * 1.6) * 0.002 * (1 - adsLerp * 0.7);
+  const idleSwayY = Math.cos(gameTime * 2.1) * 0.0015 * (1 - adsLerp * 0.7);
+
+  // Weapon bob (synced to head bob).
+  const bobMod = adsLerp > 0.5 ? 0.2 : 1;
+  weaponBobX = Math.cos(headBobPhase) * headBobAmount * 1.8 * bobMod;
+  weaponBobY = Math.sin(headBobPhase * 2) * headBobAmount * 1.2 * bobMod;
+
+  // Weapon kick from firing (Z recoil).
+  weaponKickZ += (0 - weaponKickZ) * Math.min(1, delta * 16);
+
+  // Reload animation.
+  let reloadOffsetY = 0;
+  let reloadRotX = 0;
+  if (reloading) {
+    reloadAnimTimer += delta;
+    const totalMs = selectedWeapon.reloadMs / 1000;
+    const phase = reloadAnimTimer / totalMs;
+    if (phase < 0.3) {
+      // Mag out: weapon tilts down and drops slightly.
+      reloadOffsetY = -0.12 * (phase / 0.3);
+      reloadRotX = -0.4 * (phase / 0.3);
+    } else if (phase < 0.65) {
+      // Mag in: weapon comes back up.
+      const t = (phase - 0.3) / 0.35;
+      reloadOffsetY = -0.12 + 0.12 * t;
+      reloadRotX = -0.4 + 0.4 * t;
+    } else if (phase < 0.85) {
+      // Bolt pull: slight upward tilt.
+      const t = (phase - 0.65) / 0.2;
+      reloadRotX = 0.12 * Math.sin(t * Math.PI);
+    } else {
+      reloadRotX = 0;
+      reloadOffsetY = 0;
+    }
+  } else {
+    reloadAnimTimer = 0;
+  }
+
+  // Apply final weapon transform.
+  weapon.position.set(
+    baseX + weaponSwayX + weaponBobX,
+    baseY + weaponSwayY + weaponBobY + reloadOffsetY,
+    baseZ + weaponKickZ,
+  );
+  weapon.rotation.set(
+    reloadRotX + weaponSwayY * 0.5,
+    0.02 + weaponSwayX * 0.3,
+    weaponSwayX * 0.4 + Math.sin(gameTime * 2.8) * 0.003 * (1 - adsLerp),
+  );
+
+  // Recoil recovery.
+  const recover = delta * (selectedWeapon === WEAPONS.sniper ? 0.09 : 0.2);
   recoilPitch = Math.max(0, recoilPitch - recover);
-  recoilYaw += (0 - recoilYaw) * Math.min(1, delta * 7);
-  const swayX = Math.sin(gameTime * 2.8) * 0.006;
-  weapon.rotation.z = swayX;
+  recoilYaw += (0 - recoilYaw) * Math.min(1, delta * 8);
+  // Reset recoil pattern when not firing.
+  if (!firing && recoilPitch < 0.005) {
+    recoilIndex = 0;
+  }
+
+  // Shell casing physics.
+  for (const shell of shellPool) {
+    if (shell.life <= 0) continue;
+    shell.life -= delta;
+    shell.vel.y -= 12 * delta; // gravity
+    shell.mesh.position.addScaledVector(shell.vel, delta);
+    shell.mesh.rotation.x += shell.rotVel.x * delta;
+    shell.mesh.rotation.z += shell.rotVel.z * delta;
+    // Bounce on ground.
+    if (shell.mesh.position.y < 0.01) {
+      shell.mesh.position.y = 0.01;
+      shell.vel.y *= -0.3;
+      shell.vel.x *= 0.6;
+      shell.vel.z *= 0.6;
+      shell.rotVel.multiplyScalar(0.5);
+    }
+    if (shell.life <= 0) {
+      shell.mesh.visible = false;
+    } else if (shell.life < 0.3) {
+      shell.mesh.material.opacity = shell.life / 0.3;
+      shell.mesh.material.transparent = true;
+    }
+  }
+
+  // Bullet hole life decay.
+  for (let i = bulletHoles.length - 1; i >= 0; i--) {
+    bulletHoles[i].life -= delta;
+    if (bulletHoles[i].life < 2) {
+      bulletHoles[i].mesh.material.opacity = bulletHoles[i].life / 2 * 0.7;
+    }
+    if (bulletHoles[i].life <= 0) {
+      scene.remove(bulletHoles[i].mesh);
+      bulletHoles.splice(i, 1);
+    }
+  }
+
+  // Crosshair spread indicator.
   if (ui.crosshair) {
-    const wide = firing || player.velocity.lengthSq() > 0.0001 || recoilPitch > 0.02;
+    const wide = firing || player.velocity.lengthSq() > 0.0001 || recoilPitch > 0.02 || !grounded;
     ui.crosshair.classList.toggle("is-wide", wide);
+    ui.crosshair.classList.toggle("is-ads", adsLerp > 0.7);
   }
 }
 
@@ -1740,6 +2473,12 @@ function updateHud() {
     hudCache.healthBackground = healthBackground;
     ui.healthFill.style.background = healthBackground;
   }
+  // Stamina bar.
+  const staminaWidth = `${Math.round(stamina)}%`;
+  if (hudCache.staminaWidth !== staminaWidth) {
+    hudCache.staminaWidth = staminaWidth;
+    if (ui.staminaFill) ui.staminaFill.style.width = staminaWidth;
+  }
   updateBoards();
 }
 
@@ -1785,8 +2524,19 @@ function animate() {
     updatePlayer(delta);
     updateBots(delta);
     updateDecals(delta);
+    // Decay mouse velocity for weapon sway.
+    lastMouseX *= Math.max(0, 1 - delta * 8);
+    lastMouseY *= Math.max(0, 1 - delta * 8);
     updateWeapon(delta);
     updateRadar();
+    // Update stamina bar every frame (continuous change).
+    if (ui.staminaFill) {
+      const w = `${Math.round(stamina)}%`;
+      if (hudCache.staminaWidth !== w) {
+        hudCache.staminaWidth = w;
+        ui.staminaFill.style.width = w;
+      }
+    }
   }
   renderer.render(scene, camera);
 }
@@ -1829,11 +2579,19 @@ function bindEvents() {
   document.addEventListener("mousedown", onMouseDown);
   document.addEventListener("mouseup", (event) => {
     if (event.button === 0) firing = false;
+    if (event.button === 2) adsActive = false;
+  });
+  document.addEventListener("contextmenu", (event) => {
+    if (started && !paused) event.preventDefault();
   });
   document.addEventListener("keydown", (event) => {
     if (event.code === "Tab") {
       event.preventDefault();
       ui.scoreboard?.classList.add("is-visible");
+    }
+    if (document.pointerLockElement === ui.canvas) {
+      if (event.code === "Space") event.preventDefault();
+      if (event.code === "ControlLeft" || event.code === "ControlRight") event.preventDefault();
     }
     keys.add(event.code);
     if (event.code === "KeyR") reload();
