@@ -31,6 +31,8 @@
             <span>Shift 冲刺</span>
             <span>Ctrl 蹲伏</span>
             <span>Space 跳跃</span>
+            <span>1/2/3 切枪/刀/雷</span>
+            <span>V 第一/第三人称</span>
             <span>Esc 解锁鼠标</span>
           </div>
           <button id="startBtn" type="button" disabled>进入对局</button>
@@ -70,6 +72,17 @@
           <span class="weapon-name" id="weaponName">VX-9 CARBINE</span>
           <strong><span id="ammo">30</span><small>/</small><span id="reserve">90</span></strong>
           <button id="reloadBtn" type="button">换弹 R</button>
+        </div>
+        <div class="inventory-bar" aria-label="武器背包">
+          <div class="inv-slot is-active" id="slotRifle">
+            <small>1</small><span>步枪</span>
+          </div>
+          <div class="inv-slot" id="slotKnife">
+            <small>2</small><span>军刀</span>
+          </div>
+          <div class="inv-slot" id="slotGrenade">
+            <small>3</small><span>手雷</span><em id="grenadeCount">2</em>
+          </div>
         </div>
         <div class="toast" id="toast" role="status" aria-live="polite"></div>
       </section>
