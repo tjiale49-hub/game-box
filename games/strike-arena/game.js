@@ -29,6 +29,11 @@ const ui = {
   objectiveText: document.querySelector("#objectiveText"),
   weaponName: document.querySelector("#weaponName"),
   roundLabel: document.querySelector("#roundLabel"),
+  teamPanel: document.querySelector("#teamPanel"),
+  blueScoreHud: document.querySelector("#blueScoreHud"),
+  redScoreHud: document.querySelector("#redScoreHud"),
+  blueNameHud: document.querySelector("#blueNameHud"),
+  redNameHud: document.querySelector("#redNameHud"),
   crosshair: document.querySelector("#crosshair"),
   killfeed: document.querySelector("#killfeed"),
   scoreboard: document.querySelector("#scoreboardOverlay"),
@@ -163,6 +168,57 @@ const activeGrenades = []; // thrown grenade projectiles
 const TP_DISTANCE = 3.4; // third-person camera distance
 const EYE_HEIGHT = 1.62; // eye offset above feet
 
+// --- Team system & objective-mode state ---
+const TEAM_BLUE = "blue"; // 保卫者 (defenders) - player's team
+const TEAM_RED = "red"; // 潜伏者 (attackers)
+const TEAM_COLORS = {
+  blue: { armor: 0x2c4a6e, cloth: 0x1c2f45, visor: 0x35c4ff, name: "保卫者" },
+  red: { armor: 0x6e2c2c, cloth: 0x451c1c, visor: 0xff5535, name: "潜伏者" },
+  zombie: { armor: 0x3a4a30, cloth: 0x2a3522, visor: 0x9dff35, name: "生化幽灵" },
+};
+let blueScore = 0;
+let redScore = 0;
+let playerTeam = TEAM_BLUE;
+let playerDead = false;
+let respawnTimer = 0;
+let playerKillsThisRound = 0;
+let bigheadLevel = 0;
+let playerAnimBlend = 0; // 0 = idle pose, 1 = full walk cycle
+let playerHitFlash = 0; // seconds remaining of red armor emissive flash
+
+// Bomb (C4) state for Search & Destroy.
+const bombState = {
+  planted: false,
+  site: null, // "A" | "B"
+  position: null,
+  timer: 0, // seconds until detonation
+  defuseProgress: 0,
+  carrier: null, // bot carrying the C4
+  mesh: null,
+};
+let sdRound = 1;
+let sdPhase = "combat"; // "combat" | "planted" | "roundover"
+let roundEndTimer = 0;
+
+// Zombie infection state.
+let infectionStarted = false;
+let infectionTimer = 0;
+
+// Capture the flag state.
+const ctfState = {
+  blueFlag: null, // mesh
+  redFlag: null,
+  blueHome: null, // Vector3
+  redHome: null,
+  playerCarrying: false,
+  blueCaps: 0,
+  redCaps: 0,
+};
+
+// Domination state.
+const domPoints = []; // { id, position, owner, mesh, progress }
+let domScore = { blue: 0, red: 0 };
+
 const bots = [];
 const botMeshes = [];
 const obstacles = [];
@@ -198,7 +254,8 @@ const player = {
 
 const params = new URLSearchParams(window.location.search);
 
-const MODES = {
+// --- Legacy PvE modes (kept for existing menu links) ---
+const LEGACY_MODES = {
   training: {
     name: "BOT 训练",
     code: "BOT TRAINING",
@@ -260,6 +317,221 @@ const MODES = {
     reserveScale: 0.8,
   },
 };
+
+// --- CF-style team / objective modes ---
+// Rule fields:
+//   team       -> player fights alongside allied bots vs the enemy faction
+//   ffa        -> free-for-all, everyone hostile to everyone
+//   weapons    -> allowed weapon type keys (rifle/pistol/shotgun/sniper/knife/grenade)
+//   respawn    -> player respawn delay in seconds (0 = no respawn this round)
+//   killTarget -> kills required to win (0 = objective/round based)
+//   bomb/zombie/knifeOnly/ghost/bighead/ctf/dom/savior -> special mechanics
+const CF_MODES = {
+  tdm: {
+    name: "团队竞技",
+    code: "TEAM DEATHMATCH",
+    target: "与队友配合，率先拿到 50 击杀",
+    description: "经典 5v5 团队对抗。保卫者与潜伏者正面交火，先达到击杀目标的一方获胜。",
+    team: true,
+    weapons: ["rifle", "pistol", "knife", "grenade"],
+    respawn: 3,
+    killTarget: 50,
+    botBase: 4,
+    botLimit: 9,
+    botHealth: 100,
+    botSpeed: 1.25,
+    damage: 8,
+    reserveScale: 1.2,
+  },
+  sd: {
+    name: "爆破模式",
+    code: "SEARCH & DESTROY",
+    target: "潜伏者安放 C4，保卫者拆除",
+    description: "回合制攻防。潜伏者在 A/B 点安放 C4，保卫者必须在引爆前拆除。每回合仅一次生命。",
+    team: true,
+    bomb: true,
+    weapons: ["rifle", "pistol", "knife"],
+    respawn: 0,
+    killTarget: 0,
+    roundLimit: 9,
+    botBase: 4,
+    botLimit: 8,
+    botHealth: 100,
+    botSpeed: 1.2,
+    damage: 9,
+    reserveScale: 1,
+  },
+  knife: {
+    name: "刀战模式",
+    code: "KNIFE FIGHT",
+    target: "仅用军刀，率先拿到 30 击杀",
+    description: "纯近战对抗。没有枪械，只有刀。贴近敌人，一击致命。",
+    team: true,
+    knifeOnly: true,
+    weapons: ["knife"],
+    respawn: 3,
+    killTarget: 30,
+    botBase: 5,
+    botLimit: 10,
+    botHealth: 100,
+    botSpeed: 1.5,
+    damage: 12,
+    reserveScale: 1,
+  },
+  zombie: {
+    name: "生化模式",
+    code: "BIOHAZARD",
+    target: "抵御僵尸感染，活到最后",
+    description: "开局一名玩家被感染为僵尸。僵尸近战传播感染，人类坚守阵地。最后存活的人类获胜。",
+    zombie: true,
+    weapons: ["rifle", "pistol", "knife", "grenade"],
+    respawn: 0,
+    killTarget: 0,
+    botBase: 3,
+    botLimit: 12,
+    botHealth: 260,
+    botSpeed: 1.55,
+    damage: 18,
+    reserveScale: 1.4,
+  },
+  ffa: {
+    name: "个人竞技",
+    code: "FREE FOR ALL",
+    target: "孤军奋战，率先拿到 30 击杀",
+    description: "没有队友，场上所有人都是敌人。活下来，拿到 30 杀。",
+    ffa: true,
+    weapons: ["rifle", "pistol", "knife", "grenade"],
+    respawn: 3,
+    killTarget: 30,
+    botBase: 7,
+    botLimit: 13,
+    botHealth: 100,
+    botSpeed: 1.3,
+    damage: 8,
+    reserveScale: 1.2,
+  },
+  sniperwar: {
+    name: "狙击战",
+    code: "SNIPER WAR",
+    target: "仅用狙击枪，率先拿到 20 击杀",
+    description: "远距离对决。只有狙击枪，一枪一个。考验预瞄与反应。",
+    team: true,
+    weapons: ["sniper", "knife"],
+    respawn: 3,
+    killTarget: 20,
+    botBase: 4,
+    botLimit: 8,
+    botHealth: 90,
+    botSpeed: 1.0,
+    damage: 7,
+    reserveScale: 0.9,
+  },
+  pistolwar: {
+    name: "手枪战",
+    code: "PISTOL WAR",
+    target: "仅用手枪，率先拿到 30 击杀",
+    description: "副武器对决。只有手枪，点射精准度决定胜负。",
+    team: true,
+    weapons: ["pistol", "knife"],
+    respawn: 3,
+    killTarget: 30,
+    botBase: 5,
+    botLimit: 10,
+    botHealth: 100,
+    botSpeed: 1.3,
+    damage: 8,
+    reserveScale: 1.1,
+  },
+  ghost: {
+    name: "幽灵模式",
+    code: "GHOST MODE",
+    target: "幽灵潜行刀杀，保卫者听声辨位",
+    description: "潜伏者全员隐形且仅持刀，保卫者持枪防守。隐形方靠近才能被察觉。",
+    team: true,
+    ghost: true,
+    weapons: ["rifle", "pistol", "knife"],
+    respawn: 3,
+    killTarget: 30,
+    botBase: 4,
+    botLimit: 9,
+    botHealth: 100,
+    botSpeed: 1.4,
+    damage: 9,
+    reserveScale: 1,
+  },
+  savior: {
+    name: "救世主",
+    code: "SAVIOR",
+    target: "化身救世主，清剿全部僵尸",
+    description: "人类阵营出现一名高血量救世主。僵尸成片扑来，用火力守住防线。",
+    zombie: true,
+    savior: true,
+    weapons: ["rifle", "pistol", "knife", "grenade"],
+    respawn: 0,
+    killTarget: 0,
+    botBase: 5,
+    botLimit: 14,
+    botHealth: 240,
+    botSpeed: 1.5,
+    damage: 16,
+    reserveScale: 1.6,
+  },
+  bighead: {
+    name: "大头模式",
+    code: "BIG HEAD",
+    target: "击杀涨大头，大头好爆头",
+    description: "每次击杀头部都会变大。头越大越容易爆头，也越容易被爆头。",
+    team: true,
+    bighead: true,
+    weapons: ["rifle", "pistol", "knife", "grenade"],
+    respawn: 3,
+    killTarget: 30,
+    botBase: 5,
+    botLimit: 10,
+    botHealth: 100,
+    botSpeed: 1.3,
+    damage: 8,
+    reserveScale: 1.2,
+  },
+  ctf: {
+    name: "夺旗模式",
+    code: "CAPTURE THE FLAG",
+    target: "夺取敌方军旗并带回基地",
+    description: "潜入敌方基地夺取军旗，带回己方基地得分。率先夺取 3 面旗获胜。",
+    team: true,
+    ctf: true,
+    weapons: ["rifle", "pistol", "knife", "grenade"],
+    respawn: 3,
+    killTarget: 0,
+    flagTarget: 3,
+    botBase: 4,
+    botLimit: 9,
+    botHealth: 100,
+    botSpeed: 1.3,
+    damage: 8,
+    reserveScale: 1.2,
+  },
+  dom: {
+    name: "占领模式",
+    code: "DOMINATION",
+    target: "占领并守住 A/B/C 三个据点",
+    description: "场上有三个据点。占领据点持续获得分数，率先达到目标分数获胜。",
+    team: true,
+    dom: true,
+    weapons: ["rifle", "pistol", "knife", "grenade"],
+    respawn: 3,
+    killTarget: 0,
+    scoreTarget: 300,
+    botBase: 5,
+    botLimit: 10,
+    botHealth: 100,
+    botSpeed: 1.3,
+    damage: 8,
+    reserveScale: 1.2,
+  },
+};
+
+const MODES = { ...LEGACY_MODES, ...CF_MODES };
 
 const MAPS = {
   desert: {
@@ -390,6 +662,95 @@ const MAPS = {
     spawn: [8, player.height, 23],
     nature: "research",
   },
+  deserttown: {
+    name: "沙漠小镇",
+    sky: 0x1c1408,
+    fog: 0x2a1f10,
+    ground: 0x8a6f4a,
+    concrete: 0x9c7f56,
+    accent: 0xb08d5a,
+    glow: 0xffc36a,
+    spawn: [0, player.height, 40],
+    spawns: {
+      blue: [[-20, 42], [-8, 45], [4, 45], [16, 42], [0, 38]],
+      red: [[-20, -42], [-8, -45], [4, -45], [16, -42], [0, -38]],
+    },
+    bombSites: { A: [-26, -22], B: [26, -22] },
+    ctfBases: { blue: [0, 42], red: [0, -42] },
+    domPoints: [
+      { id: "A", x: -24, z: -4 },
+      { id: "B", x: 0, z: -20 },
+      { id: "C", x: 24, z: -4 },
+    ],
+    build: buildDesertTown,
+  },
+  ship: {
+    name: "运输船",
+    sky: 0x060a10,
+    fog: 0x0a1420,
+    ground: 0x33404a,
+    concrete: 0x3c4c58,
+    accent: 0xb8533f,
+    glow: 0x40c8ff,
+    spawn: [0, player.height, 38],
+    spawns: {
+      blue: [[-16, 38], [-6, 40], [6, 40], [16, 38], [0, 34]],
+      red: [[-16, -38], [-6, -40], [6, -40], [16, -38], [0, -34]],
+    },
+    bombSites: { A: [-18, -18], B: [18, -18] },
+    ctfBases: { blue: [0, 38], red: [0, -38] },
+    domPoints: [
+      { id: "A", x: -18, z: 0 },
+      { id: "B", x: 0, z: -14 },
+      { id: "C", x: 18, z: 0 },
+    ],
+    build: buildTransportShip,
+  },
+  factory: {
+    name: "工厂",
+    sky: 0x0a0806,
+    fog: 0x14100c,
+    ground: 0x3a352e,
+    concrete: 0x4a443c,
+    accent: 0x8a5a2a,
+    glow: 0xff8c35,
+    spawn: [0, player.height, 38],
+    spawns: {
+      blue: [[-18, 38], [-6, 40], [6, 40], [18, 38], [0, 34]],
+      red: [[-18, -38], [-6, -40], [6, -40], [18, -38], [0, -34]],
+    },
+    bombSites: { A: [-22, -20], B: [22, -20] },
+    ctfBases: { blue: [0, 38], red: [0, -38] },
+    domPoints: [
+      { id: "A", x: -20, z: -2 },
+      { id: "B", x: 0, z: -18 },
+      { id: "C", x: 20, z: -2 },
+    ],
+    build: buildFactory,
+  },
+  snowbase: {
+    name: "雪地基地",
+    sky: 0x0c1420,
+    fog: 0x1a2836,
+    ground: 0xa8b8c4,
+    concrete: 0x5a6874,
+    accent: 0x7a92a8,
+    glow: 0x9de0ff,
+    spawn: [0, player.height, 40],
+    nature: "snow",
+    spawns: {
+      blue: [[-20, 42], [-8, 44], [4, 44], [16, 42], [0, 38]],
+      red: [[-20, -42], [-8, -44], [4, -44], [16, -42], [0, -38]],
+    },
+    bombSites: { A: [-24, -22], B: [24, -22] },
+    ctfBases: { blue: [0, 42], red: [0, -42] },
+    domPoints: [
+      { id: "A", x: -22, z: -4 },
+      { id: "B", x: 0, z: -20 },
+      { id: "C", x: 22, z: -4 },
+    ],
+    build: buildSnowBase,
+  },
 };
 
 const WEAPONS = {
@@ -426,6 +787,29 @@ const WEAPONS = {
     reloadMs: 1450,
     tracer: 0xfff0a6,
   },
+  pistol: {
+    name: "USP-45 TACTICAL",
+    mag: 12,
+    reserve: 60,
+    fireRate: 0.24,
+    damage: 34,
+    critical: 88,
+    recoil: 0.02,
+    reloadMs: 900,
+    tracer: 0xffe08a,
+  },
+  shotgun: {
+    name: "M-870 BREACHER",
+    mag: 8,
+    reserve: 40,
+    fireRate: 0.68,
+    damage: 16,
+    critical: 30,
+    recoil: 0.055,
+    reloadMs: 1600,
+    tracer: 0xffb458,
+    pellets: 8,
+  },
 };
 
 // Melee & throwable stats (separate from gun WEAPONS).
@@ -446,7 +830,7 @@ const GRENADE = {
 
 const selectedMode = MODES[params.get("mode")] || MODES.training;
 const selectedMap = MAPS[params.get("map")] || MAPS.desert;
-const selectedWeapon = WEAPONS[params.get("weapon")] || WEAPONS.carbine;
+let selectedWeapon = WEAPONS[params.get("weapon")] || WEAPONS.carbine;
 
 async function loadThree() {
   for (const url of THREE_URLS) {
@@ -933,7 +1317,7 @@ function initScene() {
   initShellPool();
   createViewModel();
   createPlayerModel();
-  spawnWave();
+  initModeSystems();
   updateHud();
   updateInventoryHud();
 }
@@ -947,6 +1331,15 @@ function applyScenarioText() {
   if (ui.weaponName) ui.weaponName.textContent = selectedWeapon.name;
   if (ui.roundLabel) ui.roundLabel.innerHTML = selectedMode === MODES.deathmatch ? '回合 <strong id="wave">1</strong>' : '波次 <strong id="wave">1</strong>';
   ui.wave = document.querySelector("#wave");
+  // Team score panel: only for team-based modes.
+  if (ui.teamPanel) {
+    const showTeams = Boolean(selectedMode.team || selectedMode.zombie || selectedMode.ctf || selectedMode.dom || selectedMode.bomb);
+    ui.teamPanel.hidden = !showTeams;
+    if (showTeams) {
+      if (ui.blueNameHud) ui.blueNameHud.textContent = TEAM_COLORS[TEAM_BLUE].name;
+      if (ui.redNameHud) ui.redNameHud.textContent = selectedMode.zombie ? TEAM_COLORS.zombie.name : TEAM_COLORS[TEAM_RED].name;
+    }
+  }
   // The #wave element was just recreated; clear cached HUD values so updateHud
   // repopulates the fresh elements instead of skipping them as "unchanged".
   Object.keys(hudCache).forEach((key) => delete hudCache[key]);
@@ -985,6 +1378,17 @@ function createArena() {
   ];
   wallData.forEach((data) => addBox(data, wallMat, false));
 
+  // Per-map layout (new CF-style maps) or the default arena.
+  if (selectedMap.build) {
+    selectedMap.build();
+  } else {
+    buildDefaultLayout();
+  }
+
+  createArenaProps();
+}
+
+function buildDefaultLayout() {
   // Large enterable single-storey buildings (walk inside, room by room).
   const enterable = [
     [-22, -16, 16, 12, 4.2],
@@ -1029,8 +1433,165 @@ function createArena() {
   ring.position.set(0, 0.08, 0);
   ring.rotation.x = Math.PI / 2;
   scene.add(ring);
+}
 
-  createArenaProps();
+function buildDesertTown() {
+  const wallMat = makeMaterial(selectedMap.concrete, 0.85, 0.04);
+  const crateMat = makeMaterial(0x8a6a42, 0.8, 0.05);
+  const rockMat = makeMaterial(0x7a6248, 0.9, 0.02);
+
+  // Bomb-site buildings (enterable) at A (west) and B (east).
+  createEnterableBuilding(-26, -22, 14, 11, 4, 0);
+  createEnterableBuilding(26, -22, 14, 11, 4, 1);
+
+  // Mid connector building (enterable) controlling the center lane.
+  createEnterableBuilding(0, -6, 12, 9, 3.8, 2);
+
+  // Three-lane walls: low adobe walls separating left/mid/right routes.
+  const laneWalls = [
+    [-13, -30, 1.2, 30, 2.6], // left lane wall
+    [13, -30, 1.2, 30, 2.6], // right lane wall
+    [-13, 14, 1.2, 22, 2.6],
+    [13, 14, 1.2, 22, 2.6],
+  ];
+  laneWalls.forEach(([x, z, w, d, h]) => addBox([x, h / 2, z, w, h, d], wallMat, true));
+
+  // Cover crates scattered through the lanes and mid.
+  const crates = [
+    [-20, -8, 2, 2, 2], [-24, 2, 2, 2, 2], [20, -8, 2, 2, 2], [24, 2, 2, 2, 2],
+    [-6, -16, 2, 2, 2], [6, -16, 2, 2, 2], [0, -24, 2, 2, 2],
+    [-8, 8, 2, 2, 2], [8, 8, 2, 2, 2], [-18, 20, 2, 2, 2], [18, 20, 2, 2, 2],
+    [-30, -6, 2, 2, 2], [30, -6, 2, 2, 2],
+  ];
+  crates.forEach(([x, z, w, d, h]) => addBox([x, h / 2, z, w, h, d], crateMat, true));
+
+  // Desert rocks on the flanks.
+  [[-40, -10], [40, -10], [-42, 12], [42, 12], [-36, -34], [36, -34]].forEach(([x, z]) => {
+    createRock(x, z, 1.4 + Math.random() * 0.8);
+  });
+
+  // Distant skyline silhouettes.
+  [[-48, -40, 14, 12, 12], [48, -40, 14, 12, 14], [0, -50, 20, 10, 10]].forEach(([x, z, w, d, h], i) => {
+    createBuilding(x, z, w, d, h, i + 200);
+  });
+}
+
+function buildTransportShip() {
+  const deckMat = makeMaterial(selectedMap.concrete, 0.7, 0.2);
+  const containerColors = [0xb8533f, 0x2f6070, 0x8a8a4a, 0x5a5a6a, 0x3f7a5a];
+
+  function container(x, z, rotY, stack) {
+    const mat = makeMaterial(containerColors[Math.floor(Math.random() * containerColors.length)], 0.6, 0.3);
+    for (let level = 0; level < stack; level += 1) {
+      const box = addBox([x, 1.3 + level * 2.6, z, 6, 2.6, 2.4], mat, true);
+      if (box) box.rotation.y = rotY;
+    }
+  }
+
+  // Container rows forming the three corridors (left/mid/right).
+  // Left corridor wall of containers.
+  [[-20, -26], [-20, -14], [-20, -2], [-20, 10]].forEach(([x, z], i) => container(x, z, 0, i % 2 === 0 ? 2 : 1));
+  // Right corridor wall of containers.
+  [[20, -26], [20, -14], [20, -2], [20, 10]].forEach(([x, z], i) => container(x, z, 0, i % 2 === 0 ? 1 : 2));
+  // Mid cover containers (rotated for angles).
+  [[-7, -18, 0.4], [7, -18, -0.4], [0, -8, 0], [-7, 4, -0.3], [7, 4, 0.3]].forEach(([x, z, r]) => container(x, z, r, 1));
+
+  // Ship bridge / command tower at the north end (enterable).
+  createEnterableBuilding(0, -30, 16, 10, 5, 3);
+
+  // Deck crates near the south spawn.
+  [[-10, 22, 2], [10, 22, 2], [-4, 28, 2], [4, 28, 2]].forEach(([x, z, s]) => {
+    addBox([x, s / 2, z, s, s, s], deckMat, true);
+  });
+
+  // Ship railings along the outer edges (low, non-blocking visual).
+  const railMat = makeMaterial(0x2a3540, 0.6, 0.4);
+  [[-32, 0, 0.4, 90], [32, 0, 0.4, 90]].forEach(([x, z, w, d]) => addBox([x, 0.6, z, w, 1.2, d], railMat, false));
+}
+
+function buildFactory() {
+  const steelMat = makeMaterial(0x4a443c, 0.5, 0.5);
+  const machineMat = makeMaterial(0x6a5a3a, 0.6, 0.3);
+  const pipeMat = makeMaterial(0x8a5a2a, 0.4, 0.6);
+
+  // Central machine hall (enterable) - the main mid objective.
+  createEnterableBuilding(0, -14, 18, 13, 5.5, 4);
+
+  // Side warehouses (enterable) guarding each flank.
+  createEnterableBuilding(-26, -4, 12, 10, 4.2, 5);
+  createEnterableBuilding(26, -4, 12, 10, 4.2, 6);
+
+  // Large storage tanks (solid cylinders).
+  [[-14, -30], [14, -30], [-34, 14], [34, 14]].forEach(([x, z]) => {
+    const tank = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 6, 20), steelMat);
+    tank.position.set(x, 3, z);
+    tank.castShadow = true;
+    tank.receiveShadow = true;
+    scene.add(tank);
+    obstacles.push({ minX: x - 2.6, maxX: x + 2.6, minZ: z - 2.6, maxZ: z + 2.6 });
+  });
+
+  // Pipe runs (long low cylinders, non-collidable visuals) crossing the map.
+  [[-10, 0, 60, 0], [10, 0, 60, 0], [0, -36, 40, Math.PI / 2]].forEach(([x, z, len, rot]) => {
+    const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, len, 12), pipeMat);
+    pipe.rotation.z = Math.PI / 2;
+    pipe.rotation.y = rot;
+    pipe.position.set(x, 4.6, z);
+    scene.add(pipe);
+  });
+
+  // Machinery crates and elevated platforms.
+  const machines = [
+    [-8, 10, 3, 3, 2.4], [8, 10, 3, 3, 2.4], [-18, 18, 3, 3, 2], [18, 18, 3, 3, 2],
+    [-6, -2, 2.4, 2.4, 1.8], [6, -2, 2.4, 2.4, 1.8], [0, 20, 3, 3, 2.2],
+  ];
+  machines.forEach(([x, z, w, d, h]) => addBox([x, h / 2, z, w, h, d], machineMat, true));
+
+  // Elevated catwalk platforms (visual, raised walkways).
+  [[-20, -24, 10, 1.2], [20, -24, 10, 1.2]].forEach(([x, z, len, h]) => {
+    addBox([x, h / 2 + 1.4, z, len, 0.3, 2.4], steelMat, false);
+    addBox([x, 0.7, z, 0.6, 1.4, 0.6], steelMat, true);
+  });
+}
+
+function buildSnowBase() {
+  const snowMat = makeMaterial(0xd8e4ec, 0.95, 0.0);
+  const crateMat = makeMaterial(0x5a6874, 0.7, 0.1);
+
+  // Research domes / buildings (enterable) at the bomb sites and mid.
+  createEnterableBuilding(-24, -22, 13, 10, 4, 7);
+  createEnterableBuilding(24, -22, 13, 10, 4, 8);
+  createEnterableBuilding(0, -2, 11, 9, 3.8, 9);
+
+  // Snowdrifts (soft white mounds, collidable cover).
+  const drifts = [
+    [-12, -12, 4, 2.2], [12, -12, 4, 2.2], [-16, 8, 5, 2.4], [16, 8, 5, 2.4],
+    [-8, 20, 4, 2], [8, 20, 4, 2], [0, -30, 5, 2.4], [-30, -2, 4, 2.2], [30, -2, 4, 2.2],
+  ];
+  drifts.forEach(([x, z, r, h]) => {
+    const drift = new THREE.Mesh(new THREE.SphereGeometry(r, 14, 10), snowMat);
+    drift.scale.y = h / r;
+    drift.position.set(x, 0, z);
+    drift.castShadow = true;
+    drift.receiveShadow = true;
+    scene.add(drift);
+    obstacles.push({ minX: x - r * 0.8, maxX: x + r * 0.8, minZ: z - r * 0.8, maxZ: z + r * 0.8 });
+  });
+
+  // Snowy pines around the perimeter.
+  for (let i = 0; i < 14; i += 1) {
+    const angle = (i / 14) * Math.PI * 2;
+    const radius = 44 + Math.random() * 10;
+    createTree(Math.cos(angle) * radius, Math.sin(angle) * radius, 1 + Math.random() * 0.5, true);
+  }
+
+  // Supply crates near the bases.
+  [[-10, 30, 2], [10, 30, 2], [-14, -34, 2], [14, -34, 2], [-4, 12, 2], [4, 12, 2]].forEach(([x, z, s]) => {
+    addBox([x, s / 2, z, s, s, s], crateMat, true);
+  });
+
+  // Comm tower at the north end.
+  addBox([0, 4, -40, 1.2, 8, 1.2], makeMaterial(0x4a5864, 0.5, 0.4), true);
 }
 
 function createCinematicBackdrop() {
@@ -2144,36 +2705,47 @@ function createPlayerModel() {
   const hips = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.16, 0.24), clothMat);
   hips.position.y = 0.84;
   playerModel.add(hips);
-  // Legs.
+
+  // Legs as hip-pivot groups (thigh + shin + boot) for the walk cycle.
+  playerModel.userData.limbs = { leftLeg: null, rightLeg: null, leftArm: null, rightArm: null };
   for (const side of [-1, 1]) {
+    const legPivot = new THREE.Group();
+    legPivot.position.set(side * 0.1, 0.78, 0);
     const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.065, 0.42, 10), clothMat);
-    thigh.position.set(side * 0.1, 0.58, 0);
+    thigh.position.set(0, -0.2, 0);
     thigh.castShadow = true;
-    playerModel.add(thigh);
+    legPivot.add(thigh);
     const shin = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.05, 0.4, 10), clothMat);
-    shin.position.set(side * 0.1, 0.2, 0);
-    playerModel.add(shin);
+    shin.position.set(0, -0.58, 0);
+    legPivot.add(shin);
     const boot = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.09, 0.2), bootMat);
-    boot.position.set(side * 0.1, 0.045, 0.03);
-    playerModel.add(boot);
+    boot.position.set(0, -0.74, 0.03);
+    legPivot.add(boot);
+    playerModel.add(legPivot);
+    playerModel.userData.limbs[side === -1 ? "leftLeg" : "rightLeg"] = legPivot;
   }
-  // Arms (upper + forearm), angled to hold a weapon in front.
+
+  // Arms as shoulder-pivot groups (upper + forearm + hand), angled to hold a weapon.
   for (const side of [-1, 1]) {
+    const armPivot = new THREE.Group();
+    armPivot.position.set(side * 0.26, 1.42, 0.02);
+    armPivot.rotation.x = -0.5;
+    armPivot.rotation.z = side * 0.35;
     const upper = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.055, 0.32, 10), armorMat);
-    upper.position.set(side * 0.26, 1.28, 0.02);
-    upper.rotation.z = side * 0.35;
-    upper.rotation.x = -0.5;
+    upper.position.set(0, -0.16, 0);
     upper.castShadow = true;
-    playerModel.add(upper);
+    armPivot.add(upper);
     const fore = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.045, 0.3, 10), clothMat);
-    fore.position.set(side * 0.2, 1.06, 0.22);
-    fore.rotation.x = -1.1;
-    fore.rotation.z = side * -0.25;
-    playerModel.add(fore);
+    fore.position.set(side * -0.06, -0.36, 0.2);
+    fore.rotation.x = -0.6;
+    armPivot.add(fore);
     const hand = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.08, 0.07), skinMat);
-    hand.position.set(side * 0.12, 1.0, 0.36);
-    playerModel.add(hand);
+    hand.position.set(side * -0.14, -0.42, 0.34);
+    armPivot.add(hand);
+    playerModel.add(armPivot);
+    playerModel.userData.limbs[side === -1 ? "leftArm" : "rightArm"] = armPivot;
   }
+
   // Backpack (tactical pack on the back).
   const pack = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.44, 0.16), clothMat);
   pack.position.set(0, 1.22, -0.2);
@@ -2182,6 +2754,10 @@ function createPlayerModel() {
   const packTop = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.14), armorMat);
   packTop.position.set(0, 1.48, -0.2);
   playerModel.add(packTop);
+
+  // Expose the head for big-head scaling, and the armor material for hit flash.
+  playerModel.userData.head = head;
+  playerModel.userData.armorMat = armorMat;
 
   playerModel.visible = viewMode === "tps";
   scene.add(playerModel);
@@ -2255,23 +2831,17 @@ function knifeAttack() {
   const hits = raycaster.intersectObjects(botMeshes, false);
   if (hits.length && hits[0].distance <= KNIFE.range) {
     const bot = meshToBot.get(hits[0].object);
-    if (bot) {
-      const critical = hits[0].point.y - bot.group.position.y > 1.34;
-      bot.health -= critical ? KNIFE.critical : KNIFE.damage;
-      bot.hitReact = 1;
-      spawnImpact(hits[0].point, 0xff5566);
-      showHitmarker();
-      playHitSound(critical);
-      if (bot.health <= 0) {
-        removeBot(bot);
-        kills += 1;
-        streak += 1;
-        bestStreak = Math.max(bestStreak, streak);
-        pushKillfeed("<b>你</b> 刀杀 敌方步兵");
-        showToast("刀杀 +1");
-        if (selectedMode === MODES.deathmatch && kills >= 30) endMatch("团队竞技胜利");
+    if (bot && !bot.dead) {
+      const friendly = !selectedMode.ffa && !isHostileToPlayer(bot);
+      if (!friendly) {
+        const critical = hits[0].point.y - bot.group.position.y > 1.34;
+        applyBotDamage(bot, critical ? KNIFE.critical : KNIFE.damage, true);
+        spawnImpact(hits[0].point, 0xff5566);
+        showHitmarker();
+        playHitSound(critical);
+        if (bot.health <= 0) showToast("刀杀 +1");
+        updateHud();
       }
-      updateHud();
     }
   }
 }
@@ -2343,52 +2913,126 @@ function explodeGrenade(point) {
 
   // Damage bots within blast radius (falloff with distance).
   bots.forEach((bot) => {
+    if (bot.dead) return;
+    const friendly = !selectedMode.ffa && !isHostileToPlayer(bot);
+    if (friendly) return;
     const d = bot.group.position.distanceTo(point);
     if (d <= GRENADE.blastRadius) {
       const falloff = 1 - d / GRENADE.blastRadius;
-      bot.health -= GRENADE.damage * (0.4 + 0.6 * falloff);
-      bot.hitReact = 1;
-      if (bot.health <= 0) {
-        removeBot(bot);
-        kills += 1;
-        streak += 1;
-        bestStreak = Math.max(bestStreak, streak);
-        pushKillfeed("<b>你</b> 手雷炸毁 敌方步兵");
-        if (selectedMode === MODES.deathmatch && kills >= 30) endMatch("团队竞技胜利");
-      }
+      applyBotDamage(bot, GRENADE.damage * (0.4 + 0.6 * falloff), true);
     }
   });
   showToast("手雷爆炸");
   updateHud();
 }
 
+function initModeSystems() {
+  // Faction: player defends (blue) in team modes.
+  playerTeam = TEAM_BLUE;
+  blueScore = 0;
+  redScore = 0;
+  bigheadLevel = 0;
+  playerKillsThisRound = 0;
+
+  // Enforce the mode's weapon loadout.
+  if (selectedMode.knifeOnly) {
+    currentWeaponType = "knife";
+  } else if (selectedMode.weapons && !selectedMode.weapons.includes("rifle")) {
+    if (selectedMode.weapons.includes("sniper")) {
+      selectedWeapon = WEAPONS.sniper;
+    } else if (selectedMode.weapons.includes("pistol")) {
+      selectedWeapon = WEAPONS.pistol;
+    }
+    currentWeaponType = "rifle";
+    ammo = selectedWeapon.mag;
+    reserve = Math.round(selectedWeapon.reserve * selectedMode.reserveScale);
+  }
+  createViewModel();
+
+  // Mode-specific setup.
+  if (selectedMode.zombie) {
+    infectionStarted = false;
+    infectionTimer = 8; // grace period before the first wave turns hostile
+    if (selectedMode.savior) {
+      health = 300; // savior bonus health
+      showToast("你已化身救世主（300 HP）");
+    }
+  }
+  if (selectedMode.dom) setupDomPoints();
+  if (selectedMode.ctf) setupCtf();
+
+  if (selectedMode.bomb) {
+    sdRound = 1;
+    startSdRound();
+  } else {
+    spawnWave();
+  }
+}
+
+function spawnAlliedSquad(count) {
+  for (let i = 0; i < count; i += 1) {
+    spawnBot(playerTeam, { isSavior: selectedMode.savior && i === 0 });
+  }
+}
+
 function spawnWave() {
   const count = Math.min(selectedMode.botBase + Math.floor(wave * 1.15), selectedMode.botLimit);
+
+  if (selectedMode.zombie) {
+    // Zombies swarm the player; savior mode adds one powerful ally.
+    if (selectedMode.savior) spawnAlliedSquad(1);
+    for (let i = 0; i < count; i += 1) spawnBot(TEAM_RED, { isZombie: true });
+    showToast(infectionStarted ? "生化幽灵增援抵达" : `${selectedMode.name}：感染爆发`);
+    return;
+  }
+
+  if (selectedMode.team) {
+    // Player squad (allies) vs opposing squad (enemies).
+    const allies = Math.max(2, Math.floor(count / 2));
+    const enemies = Math.max(2, count - allies);
+    spawnAlliedSquad(allies);
+    for (let i = 0; i < enemies; i += 1) {
+      spawnBot(TEAM_RED, { isGhost: selectedMode.ghost });
+    }
+    showToast(`${selectedMode.name}：第 ${wave} 波对抗开始`);
+    return;
+  }
+
+  if (selectedMode.ffa) {
+    for (let i = 0; i < count; i += 1) spawnBot(TEAM_RED);
+    showToast(`${selectedMode.name}：第 ${wave} 波敌人出现`);
+    return;
+  }
+
+  // Legacy PvE wave.
   for (let i = 0; i < count; i += 1) {
     spawnBot();
   }
   showToast(`${selectedMode.name}：第 ${wave} 轮目标已出现`);
 }
 
-function spawnBot() {
+function spawnBot(team = TEAM_RED, options = {}) {
+  const isZombie = !!options.isZombie;
+  const isSavior = !!options.isSavior;
+  const faction = isZombie ? TEAM_COLORS.zombie : TEAM_COLORS[team] || TEAM_COLORS.red;
   const group = new THREE.Group();
   const armorMat = new THREE.MeshStandardMaterial({
-    color: 0x384047,
+    color: isSavior ? 0xc9a227 : faction.armor,
     roughness: 0.66,
     metalness: 0.18,
-    emissive: 0x080b0d,
+    emissive: isZombie ? 0x0a1405 : 0x080b0d,
   });
   const clothMat = new THREE.MeshStandardMaterial({
-    color: 0x1b221f,
+    color: faction.cloth,
     roughness: 0.9,
     metalness: 0.04,
   });
   const skinMat = new THREE.MeshStandardMaterial({
-    color: 0x7e6758,
+    color: isZombie ? 0x6a7a52 : 0x7e6758,
     roughness: 0.78,
     metalness: 0.02,
   });
-  const visorMat = new THREE.MeshBasicMaterial({ color: selectedMap.glow });
+  const visorMat = new THREE.MeshBasicMaterial({ color: faction.visor });
   const botTexture = enemyTextures.length ? enemyTextures[Math.floor(Math.random() * enemyTextures.length)] : enemyTexture;
   const idleTexture = botTexture;
   const actionTexture = enemyFrames.aim?.[0] || enemyActionTexture || botTexture;
@@ -2475,9 +3119,21 @@ function spawnBot() {
     botMeshes.push(visual);
   }
 
-  const spawn = randomSpawnPoint();
+  const spawn = randomSpawnPoint(team);
   group.position.set(spawn.x, 0, spawn.z);
   scene.add(group);
+
+  const isGhost = !!options.isGhost;
+  if (isGhost) {
+    group.traverse((child) => {
+      if (child.isMesh && child.material) {
+        child.material = child.material.clone();
+        child.material.transparent = true;
+        child.material.opacity = 0.16;
+        child.material.depthWrite = false;
+      }
+    });
+  }
 
   const bot = {
     group,
@@ -2492,19 +3148,69 @@ function spawnBot() {
     hitReact: 0,
     fireReact: 0,
     lastDistance: 999,
-    health: selectedMode.botHealth + wave * 8,
-    speed: selectedMode.botSpeed + Math.random() * 0.45 + wave * 0.025,
+    team,
+    isZombie,
+    isSavior,
+    isGhost,
+    botKills: 0,
+    health: isZombie
+      ? selectedMode.botHealth + wave * 12
+      : isSavior
+        ? 500
+        : selectedMode.botHealth + wave * 8,
+    maxHealth: 0,
+    speed: isZombie
+      ? selectedMode.botSpeed + Math.random() * 0.3
+      : selectedMode.botSpeed + Math.random() * 0.45 + wave * 0.025,
     nextShot: Math.random() * 2,
     strafe: Math.random() > 0.5 ? 1 : -1,
+    // Procedural walk-cycle phase offset so bots don't move in lockstep.
+    animPhase: Math.random() * Math.PI * 2,
+    dead: false,
+    deathTimer: 0,
   };
+  bot.maxHealth = bot.health;
   bots.push(bot);
   group.traverse((child) => {
     if (child.isMesh || child.isSprite) meshToBot.set(child, bot);
   });
+  // Cache limb meshes for the procedural walk cycle.
+  bot.limbs = { leftArm: null, rightArm: null, leftLeg: null, rightLeg: null, head: null };
+  group.children.forEach((child) => {
+    const zone = child.userData.hitZone;
+    if (zone === "leftArm" || zone === "rightArm" || zone === "leftLeg" || zone === "rightLeg" || zone === "head") {
+      bot.limbs[zone] = child;
+    }
+  });
+  return bot;
 }
 
-function randomSpawnPoint() {
-  if (bots.length < 3) {
+function getTeamSpawns(team) {
+  const mapSpawns = selectedMap.spawns;
+  if (mapSpawns && mapSpawns[team]) return mapSpawns[team];
+  // Default opposing-corner spawn zones (blue south, red north).
+  return team === TEAM_BLUE
+    ? [
+        [-30, 40],
+        [-18, 44],
+        [0, 46],
+        [18, 44],
+        [30, 40],
+      ]
+    : [
+        [-30, -40],
+        [-18, -44],
+        [0, -46],
+        [18, -44],
+        [30, -40],
+      ];
+}
+
+function randomSpawnPoint(team = TEAM_RED) {
+  const useTeamZones = selectedMode.team || selectedMode.ffa || selectedMode.zombie;
+
+  // Early bots in legacy PvE modes spawn just ahead of the player.
+  if (!useTeamZones && bots.length < 3) {
     const baseX = camera.position.x;
     const baseZ = camera.position.z;
     const earlySpawns = [
@@ -2517,6 +3223,20 @@ function randomSpawnPoint() {
     spawn.z = Math.max(-50, Math.min(50, spawn.z));
     return spawn;
   }
+
+  if (useTeamZones) {
+    const zones = getTeamSpawns(team);
+    for (let i = 0; i < 40; i += 1) {
+      const base = zones[Math.floor(Math.random() * zones.length)];
+      const x = base[0] + (Math.random() - 0.5) * 6;
+      const z = base[1] + (Math.random() - 0.5) * 6;
+      const candidate = new THREE.Vector3(x, player.height, z);
+      if (!collides(candidate)) return { x, z };
+    }
+    const fallback = zones[0];
+    return { x: fallback[0], z: fallback[1] };
+  }
+
   for (let i = 0; i < 50; i += 1) {
     const x = -50 + Math.random() * 100;
     const z = -50 + Math.random() * 100;
@@ -2603,25 +3323,22 @@ function shoot() {
   if (hits.length) {
     const mesh = hits[0].object;
     const bot = meshToBot.get(mesh);
-    if (bot) {
-      shotsHit += 1;
-      const critical = mesh.userData.hitZone === "head" || hits[0].point.y - bot.group.position.y > 1.34;
-      bot.health -= critical ? selectedWeapon.critical : selectedWeapon.damage;
-      bot.hitReact = critical ? 1 : 0.65;
-      spawnTracer(hits[0].point, critical ? 0xffd166 : selectedWeapon.tracer);
-      spawnImpact(hits[0].point, critical ? 0xffd166 : selectedMap.glow);
-      showHitmarker();
-      playHitSound(critical);
-      if (bot.health <= 0) {
-        removeBot(bot);
-        kills += 1;
-        streak += 1;
-        bestStreak = Math.max(bestStreak, streak);
-        reserve = Math.min(selectedWeapon.reserve * 2, reserve + Math.round(8 * selectedMode.reserveScale));
-        const feed = critical ? "<b>你</b> 精准击破 敌方步兵" : "<b>你</b> 击破 敌方步兵";
-        pushKillfeed(feed);
-        showToast(critical ? "精准命中 +1" : "敌方步兵击破 +1");
-        if (selectedMode === MODES.deathmatch && kills >= 30) endMatch("团队竞技胜利");
+    if (bot && !bot.dead) {
+      // No friendly fire outside FFA.
+      const friendly = !selectedMode.ffa && !isHostileToPlayer(bot);
+      if (friendly) {
+        spawnTracer(hits[0].point, 0x88aaff);
+      } else {
+        shotsHit += 1;
+        const critical = mesh.userData.hitZone === "head" || hits[0].point.y - bot.group.position.y > 1.34;
+        applyBotDamage(bot, critical ? selectedWeapon.critical : selectedWeapon.damage, true);
+        spawnTracer(hits[0].point, critical ? 0xffd166 : selectedWeapon.tracer);
+        spawnImpact(hits[0].point, critical ? 0xffd166 : selectedMap.glow);
+        showHitmarker();
+        playHitSound(critical);
+        if (bot.health <= 0) {
+          showToast(critical ? "精准命中 +1" : "击破 +1");
+        }
       }
     }
   } else {
@@ -2791,6 +3508,7 @@ function reload() {
 }
 
 function updatePlayer(delta) {
+  if (playerDead) return;
   const weight = selectedWeapon === WEAPONS.sniper ? 0.88 : selectedWeapon === WEAPONS.smg ? 1.08 : 1;
 
   // Sprint + stamina system.
@@ -2911,13 +3629,140 @@ function botCollides(position) {
   );
 }
 
+function animateBotLimbs(bot, step, movingAmount) {
+  if (!bot.limbs) return;
+  const { leftArm, rightArm, leftLeg, rightLeg } = bot.limbs;
+  const swing = step * 0.55 * movingAmount;
+  if (bot.isZombie) {
+    // Zombies lurch with arms raised forward.
+    if (leftArm) leftArm.rotation.x = -1.2 + step * 0.12;
+    if (rightArm) rightArm.rotation.x = -1.2 - step * 0.12;
+    if (leftLeg) leftLeg.rotation.x = swing * 0.8;
+    if (rightLeg) rightLeg.rotation.x = -swing * 0.8;
+    return;
+  }
+  if (leftArm) leftArm.rotation.x = -swing * 0.7;
+  if (rightArm) rightArm.rotation.x = swing * 0.5 - 0.35; // right arm holds weapon forward
+  if (leftLeg) leftLeg.rotation.x = swing;
+  if (rightLeg) rightLeg.rotation.x = -swing;
+}
+
+function applyBigheadToPlayer() {
+  if (!playerModel) return;
+  const head = playerModel.userData.head;
+  if (!head) return;
+  const scale = 1 + Math.min(bigheadLevel, 8) * 0.22;
+  head.scale.set(scale, scale, scale);
+}
+
+function checkKillTargetWin() {
+  if (!selectedMode.killTarget) return;
+  if (kills >= selectedMode.killTarget) {
+    endMatch(`${selectedMode.name}胜利`);
+  }
+}
+
+function isHostileToPlayer(bot) {
+  if (bot.dead) return false;
+  if (selectedMode.ffa) return true;
+  if (selectedMode.zombie) return bot.isZombie;
+  if (selectedMode.team) return bot.team !== playerTeam;
+  return true; // legacy PvE
+}
+
+function isHostileToBot(a, b) {
+  if (a.dead || b.dead) return false;
+  if (selectedMode.ffa) return a !== b;
+  if (selectedMode.zombie) return a.isZombie !== b.isZombie;
+  if (selectedMode.team) return a.team !== b.team;
+  return false; // legacy bots share a team
+}
+
+function getBotTarget(bot) {
+  let best = null;
+  let bestDist = Infinity;
+  if (!playerDead && isHostileToPlayer(bot)) {
+    const d = bot.group.position.distanceTo(camera.position);
+    bestDist = d;
+    best = { position: camera.position, isPlayer: true, bot: null, distance: d };
+  }
+  for (let i = 0; i < bots.length; i += 1) {
+    const other = bots[i];
+    if (other === bot || !isHostileToBot(bot, other)) continue;
+    const d = bot.group.position.distanceTo(other.group.position);
+    if (d < bestDist) {
+      bestDist = d;
+      best = { position: other.group.position, isPlayer: false, bot: other, distance: d };
+    }
+  }
+  return best;
+}
+
+function killBot(bot, byPlayer) {
+  if (bot.dead) return;
+  bot.dead = true;
+  bot.deathTimer = 0.9;
+  bot.group.userData.dying = true;
+
+  if (byPlayer) {
+    kills += 1;
+    streak += 1;
+    playerKillsThisRound += 1;
+    bestStreak = Math.max(bestStreak, streak);
+    reserve = Math.min(selectedWeapon.reserve * 2, reserve + Math.round(8 * selectedMode.reserveScale));
+    if (selectedMode.bighead) {
+      bigheadLevel += 1;
+      applyBigheadToPlayer();
+    }
+    if (selectedMode.team) blueScore += 1;
+    const zone = bot.isZombie ? "生化幽灵" : TEAM_COLORS[bot.team]?.name || "敌方步兵";
+    pushKillfeed(`<b>你</b> 击破 ${zone}`);
+    checkKillTargetWin();
+  } else {
+    if (selectedMode.team && bot.team !== playerTeam) redScore += 1;
+  }
+
+  // Zombie infection: a human bot killed by a zombie rises as one.
+  if (selectedMode.zombie && !bot.isZombie && !byPlayer) {
+    window.setTimeout(() => {
+      removeBot(bot);
+      spawnBot(TEAM_RED, { isZombie: true });
+    }, 1200);
+  }
+  updateHud();
+}
+
+function applyBotDamage(bot, amount, byPlayer) {
+  if (bot.dead) return;
+  bot.health -= amount;
+  bot.hitReact = 1;
+  if (bot.health <= 0) killBot(bot, byPlayer);
+}
+
 function updateBots(delta) {
   botSpawnTimer -= delta;
+
+  // Advance death animations and clean up corpses.
+  for (let i = bots.length - 1; i >= 0; i -= 1) {
+    const bot = bots[i];
+    if (!bot.dead) continue;
+    bot.deathTimer -= delta;
+    const t = 1 - Math.max(0, bot.deathTimer) / 0.9;
+    bot.group.rotation.x = -t * (Math.PI / 2) * 0.92;
+    bot.group.position.y = -t * 0.35;
+    if (bot.visual) bot.visual.material.opacity = Math.max(0, 1 - t * 1.2);
+    if (bot.deathTimer <= 0) removeBot(bot);
+  }
+
   bots.forEach((bot) => {
-    const toPlayer = tmpV1.copy(camera.position).sub(bot.group.position);
-    const distance = toPlayer.length();
-    toPlayer.y = 0;
-    const dir = toPlayer.normalize();
+    if (bot.dead) return;
+    const target = getBotTarget(bot);
+    const targetPos = target ? target.position : camera.position;
+    const distance = target ? target.distance : 999;
+
+    const toTarget = tmpV1.copy(targetPos).sub(bot.group.position);
+    toTarget.y = 0;
+    const dir = toTarget.lengthSq() > 0 ? toTarget.normalize() : tmpV1.set(0, 0, 1);
     const tangent = tmpV2.set(-dir.z, 0, dir.x).multiplyScalar(bot.strafe);
 
     // Tactical strafing: change direction periodically.
@@ -2929,44 +3774,46 @@ function updateBots(delta) {
       tangent.multiplyScalar(-1);
     }
 
-    // Movement: approach if far, hold position at mid range, retreat if too close.
+    // Zombies charge relentlessly; soldiers use approach/hold/retreat spacing.
     let approachFactor;
-    if (distance > 14) approachFactor = 1;
+    if (bot.isZombie) {
+      approachFactor = distance > 1.6 ? 1 : 0;
+    } else if (distance > 14) approachFactor = 1;
     else if (distance > 6) approachFactor = 0.3;
-    else approachFactor = -0.4; // back off at close range
+    else approachFactor = -0.4;
 
-    // Low health bots seek cover (move toward nearest obstacle).
-    const healthRatio = bot.health / (selectedMode.botHealth + wave * 8);
-    if (healthRatio < 0.35 && distance < 18) {
-      // Strafe more aggressively when hurt.
+    const healthRatio = bot.health / bot.maxHealth;
+    if (!bot.isZombie && healthRatio < 0.35 && distance < 18) {
       approachFactor = -0.2;
       tangent.multiplyScalar(1.8);
     }
 
-    // Dodge faster when recently hit.
     const dodgeMod = bot.hitReact > 0.1 ? 1.6 : 1;
-    const desired = tmpV3.copy(dir).multiplyScalar(approachFactor).addScaledVector(tangent, 0.5 * dodgeMod);
+    const desired = tmpV3.copy(dir).multiplyScalar(approachFactor).addScaledVector(tangent, bot.isZombie ? 0.15 : 0.5 * dodgeMod);
     if (desired.lengthSq() > 0) desired.normalize();
-    const speed = bot.speed * dodgeMod * (healthRatio < 0.35 ? 1.3 : 1);
+    const speed = bot.speed * dodgeMod * (!bot.isZombie && healthRatio < 0.35 ? 1.3 : 1);
     const next = tmpV4.copy(bot.group.position).addScaledVector(desired, speed * delta);
-    next.x = Math.max(-38, Math.min(38, next.x));
-    next.z = Math.max(-38, Math.min(38, next.z));
+    next.x = Math.max(-60, Math.min(60, next.x));
+    next.z = Math.max(-60, Math.min(60, next.z));
     if (botCollides(next)) {
       const side = tmpV5.copy(bot.group.position).addScaledVector(tangent.normalize(), speed * delta * 1.8);
-      side.x = Math.max(-38, Math.min(38, side.x));
-      side.z = Math.max(-38, Math.min(38, side.z));
+      side.x = Math.max(-60, Math.min(60, side.x));
+      side.z = Math.max(-60, Math.min(60, side.z));
       if (!botCollides(side)) bot.group.position.copy(side);
     } else {
       bot.group.position.copy(next);
     }
-    bot.group.lookAt(camera.position.x, bot.group.position.y, camera.position.z);
+    bot.group.lookAt(targetPos.x, bot.group.position.y, targetPos.z);
+
+    // Procedural walk cycle (leg/arm swing driven by animPhase).
     const movingAmount = desired.lengthSq() > 0 ? 1 : 0;
-    const step = Math.sin(gameTime * (8.5 + bot.speed * 1.3) + bot.speed * 3);
+    bot.animPhase += delta * (6 + bot.speed * 2.4) * movingAmount;
+    const step = Math.sin(bot.animPhase);
     bot.group.position.y = Math.abs(step) * 0.045 * movingAmount;
     bot.group.rotation.z = step * 0.035 * movingAmount;
+    animateBotLimbs(bot, step, movingAmount);
 
-    // Crouch-like behavior at close range (lower the group slightly).
-    if (distance < 5 && movingAmount < 0.5) {
+    if (distance < 5 && movingAmount < 0.5 && !bot.isZombie) {
       bot.group.position.y -= 0.15;
     }
 
@@ -2999,25 +3846,48 @@ function updateBots(delta) {
       bot.visual.material.opacity = 0.98 - bot.hitReact * 0.28;
     }
 
-    // Burst fire pattern (CS-style: 2-4 shots per burst).
+    // --- Attack ---
     if (!bot.burstCount) bot.burstCount = 0;
     if (!bot.burstPause) bot.burstPause = 0;
     bot.nextShot -= delta;
+
+    if (bot.isZombie) {
+      // Melee lunge: damage + infect on close contact.
+      if (distance < 2.2 && bot.nextShot <= 0) {
+        bot.fireReact = 1;
+        bot.nextShot = 0.9;
+        if (target && target.isPlayer) {
+          damagePlayer(selectedMode.damage);
+          pushKillfeed("生化幽灵 抓伤 <b>你</b>");
+        } else if (target && target.bot) {
+          applyBotDamage(target.bot, selectedMode.damage + 20, false);
+        }
+      }
+      return;
+    }
+
     if (bot.burstPause > 0) {
       bot.burstPause -= delta;
-    } else if (distance < 24 && bot.nextShot <= 0 && !lineBlocked(tmpV5.copy(bot.group.position).setY(bot.group.position.y + 1.35), camera.position)) {
+    } else if (
+      target &&
+      distance < 24 &&
+      bot.nextShot <= 0 &&
+      !lineBlocked(tmpV5.copy(bot.group.position).setY(bot.group.position.y + 1.35), targetPos)
+    ) {
       bot.fireReact = 1;
-      // Accuracy decreases with distance and movement.
       const accuracyMod = distance > 16 ? 0.6 : distance > 10 ? 0.8 : 1;
-      const hitChance = 0.55 * accuracyMod * (movingAmount > 0.5 ? 0.7 : 1);
+      const hitChance = 0.5 * accuracyMod * (movingAmount > 0.5 ? 0.7 : 1);
       if (Math.random() < hitChance) {
-        damagePlayer(selectedMode.damage + Math.floor(wave * 0.8));
-        pushKillfeed("敌方步兵 命中 <b>你</b>");
+        if (target.isPlayer) {
+          damagePlayer(selectedMode.damage + Math.floor(wave * 0.8));
+          pushKillfeed("敌方步兵 命中 <b>你</b>");
+        } else if (target.bot) {
+          applyBotDamage(target.bot, 24 + Math.floor(wave * 1.5), false);
+        }
       }
       bot.burstCount += 1;
-      bot.nextShot = 0.12 + Math.random() * 0.08; // fast within burst
+      bot.nextShot = 0.12 + Math.random() * 0.08;
       if (bot.burstCount >= 2 + Math.floor(Math.random() * 3)) {
-        // End burst, pause before next.
         bot.burstCount = 0;
         bot.burstPause = 0.8 + Math.random() * 1.2;
         bot.nextShot = 0.4;
@@ -3025,26 +3895,387 @@ function updateBots(delta) {
     }
   });
 
-  if (bots.length === 0 && botSpawnTimer <= 0) {
+  // Reinforcement / wave logic.
+  const aliveEnemies = bots.filter((b) => !b.dead && isHostileToPlayer(b)).length;
+  if (selectedMode.team || selectedMode.ffa || selectedMode.zombie) {
+    if (aliveEnemies === 0 && botSpawnTimer <= 0) {
+      wave += 1;
+      botSpawnTimer = 2.2;
+      spawnWave();
+    }
+  } else if (bots.length === 0 && botSpawnTimer <= 0) {
     wave += 1;
     botSpawnTimer = 1.5;
     spawnWave();
   }
 }
 
+function respawnPlayer() {
+  playerDead = false;
+  respawnTimer = 0;
+  health = 100;
+  const spawn = randomSpawnPoint(playerTeam);
+  camera.position.set(spawn.x, player.height, spawn.z);
+  player.velocity.set(0, 0, 0);
+  verticalVelocity = 0;
+  ammo = selectedWeapon.mag;
+  setHudText("objective", ui.objectiveText, selectedMode.target);
+  showToast("已复活，继续战斗");
+  updateHud();
+}
+
 function damagePlayer(amount) {
-  if (matchEnded) return;
+  if (matchEnded || playerDead) return;
   health = Math.max(0, health - amount);
   streak = 0;
+  playerHitFlash = 0.35;
   playTone(120, 0.1, "sawtooth", 0.16);
   ui.damage.classList.add("is-visible");
   window.clearTimeout(damagePlayer.timer);
   damagePlayer.timer = window.setTimeout(() => ui.damage.classList.remove("is-visible"), 130);
   if (health <= 0) {
-    endMatch("行动失败");
-    showToast("行动失败，查看结算");
+    if (selectedMode.respawn > 0) {
+      // Respawn-enabled modes: enter dead state with a countdown.
+      playerDead = true;
+      respawnTimer = selectedMode.respawn;
+      if (selectedMode.team) redScore += 1;
+      pushKillfeed("敌方步兵 击破 <b>你</b>");
+      showToast(`${selectedMode.respawn} 秒后复活`);
+    } else if (selectedMode.bomb) {
+      // Search & Destroy: death ends the round (no respawn).
+      playerDead = true;
+      endSdRound(false, "你已阵亡");
+    } else {
+      endMatch("行动失败");
+      showToast("行动失败，查看结算");
+    }
   }
   updateHud();
+}
+
+function getBombSites() {
+  const raw = selectedMap.bombSites || { A: [-24, -20], B: [24, -20] };
+  return {
+    A: new THREE.Vector3(raw.A[0], 0, raw.A[1]),
+    B: new THREE.Vector3(raw.B[0], 0, raw.B[1]),
+  };
+}
+
+function createBombMesh(position) {
+  const group = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(0.42, 0.14, 0.3),
+    new THREE.MeshStandardMaterial({ color: 0x22262b, roughness: 0.5, metalness: 0.3 }),
+  );
+  body.castShadow = true;
+  group.add(body);
+  const light = new THREE.Mesh(
+    new THREE.SphereGeometry(0.045, 10, 8),
+    new THREE.MeshBasicMaterial({ color: 0xff2222 }),
+  );
+  light.position.set(0.14, 0.09, 0);
+  group.add(light);
+  const glow = new THREE.PointLight(0xff3322, 6, 4);
+  glow.position.set(0, 0.3, 0);
+  group.add(glow);
+  group.position.copy(position).setY(0.12);
+  scene.add(group);
+  return group;
+}
+
+function plantBomb(site) {
+  if (bombState.planted) return;
+  const sites = getBombSites();
+  bombState.planted = true;
+  bombState.site = site;
+  bombState.position = sites[site].clone();
+  bombState.timer = 35;
+  bombState.defuseProgress = 0;
+  bombState.mesh = createBombMesh(bombState.position);
+  sdPhase = "planted";
+  showToast(`C4 已安放于 ${site} 点！立即拆除！`);
+  pushKillfeed(`潜伏者 在 <b>${site} 点</b>安放了 C4`);
+  playTone(880, 0.12, "square", 0.2);
+}
+
+function endSdRound(playerWon, reason) {
+  if (sdPhase === "roundover") return;
+  sdPhase = "roundover";
+  roundEndTimer = 3;
+  if (playerWon) {
+    blueScore += 1;
+    showToast(`回合胜利：${reason}`);
+  } else {
+    redScore += 1;
+    showToast(`回合失败：${reason}`);
+  }
+  pushKillfeed(`回合结束 <b>${reason}</b>`);
+  updateHud();
+}
+
+function startSdRound() {
+  sdPhase = "combat";
+  bombState.planted = false;
+  bombState.site = null;
+  bombState.defuseProgress = 0;
+  if (bombState.mesh) {
+    scene.remove(bombState.mesh);
+    bombState.mesh = null;
+  }
+  // Clear surviving bots and respawn fresh squads.
+  bots.slice().forEach((bot) => removeBot(bot));
+  playerDead = false;
+  health = 100;
+  const spawn = randomSpawnPoint(playerTeam);
+  camera.position.set(spawn.x, player.height, spawn.z);
+  ammo = selectedWeapon.mag;
+  // Assign a random red bot as the C4 carrier.
+  spawnWave();
+  const reds = bots.filter((b) => b.team === TEAM_RED);
+  if (reds.length) {
+    bombState.carrier = reds[Math.floor(Math.random() * reds.length)];
+    bombState.carrier.hasBomb = true;
+  }
+  showToast(`第 ${sdRound} 回合：阻止潜伏者安放 C4`);
+}
+
+function updateBomb(delta) {
+  // Carrier AI: walk to a bomb site and plant.
+  if (sdPhase === "combat" && bombState.carrier && !bombState.carrier.dead && !bombState.carrier.hasBomb) {
+    bombState.carrier = null;
+  }
+  if (sdPhase === "combat" && bombState.carrier) {
+    const carrier = bombState.carrier;
+    if (carrier.dead) {
+      // Drop the bomb; another red picks it up.
+      const reds = bots.filter((b) => b.team === TEAM_RED && !b.dead);
+      bombState.carrier = reds.length ? reds[0] : null;
+      if (bombState.carrier) bombState.carrier.hasBomb = true;
+    } else {
+      const sites = getBombSites();
+      const targetSite = carrier.group.position.distanceTo(sites.A) < carrier.group.position.distanceTo(sites.B) ? "A" : "B";
+      const target = sites[targetSite];
+      const toSite = tmpV1.copy(target).sub(carrier.group.position);
+      toSite.y = 0;
+      const dist = toSite.length();
+      if (dist > 1.2) {
+        toSite.normalize();
+        carrier.group.position.addScaledVector(toSite, carrier.speed * delta * 0.9);
+        carrier.group.lookAt(target.x, carrier.group.position.y, target.z);
+      } else {
+        if (!carrier.plantProgress) carrier.plantProgress = 0;
+        carrier.plantProgress += delta;
+        if (carrier.plantProgress >= 2.5) plantBomb(targetSite);
+      }
+    }
+  }
+
+  // Planted bomb: countdown + player defuse.
+  if (sdPhase === "planted" && bombState.planted) {
+    bombState.timer -= delta;
+    if (bombState.mesh) {
+      const blink = Math.sin(gameTime * (bombState.timer < 8 ? 18 : 6)) > 0;
+      bombState.mesh.children[1].material.color.setHex(blink ? 0xff2222 : 0x330000);
+    }
+    // Defuse: player stands near the bomb.
+    const nearBomb = camera.position.distanceTo(bombState.position) < 2.4;
+    if (nearBomb && !playerDead) {
+      bombState.defuseProgress += delta;
+      if (Math.floor(gameTime * 4) % 2 === 0) {
+        setHudText("objective", ui.objectiveText, `拆除中 ${Math.round((bombState.defuseProgress / 5) * 100)}%`);
+      }
+      if (bombState.defuseProgress >= 5) {
+        endSdRound(true, "C4 已拆除");
+        return;
+      }
+    } else if (bombState.defuseProgress > 0) {
+      bombState.defuseProgress = Math.max(0, bombState.defuseProgress - delta * 2);
+    }
+    if (bombState.timer <= 0) {
+      // Detonation.
+      explodeGrenade(bombState.position.clone().setY(1));
+      endSdRound(false, "C4 爆炸");
+    }
+  }
+
+  // Round-over: advance to next round or end match.
+  if (sdPhase === "roundover") {
+    roundEndTimer -= delta;
+    if (roundEndTimer <= 0) {
+      sdRound += 1;
+      if (blueScore >= Math.ceil(selectedMode.roundLimit / 2) || redScore >= Math.ceil(selectedMode.roundLimit / 2)) {
+        endMatch(blueScore > redScore ? "爆破模式胜利" : "爆破模式失败");
+      } else {
+        startSdRound();
+      }
+    }
+    return;
+  }
+
+  // Combat phase win/lose checks.
+  if (sdPhase === "combat") {
+    const redsAlive = bots.some((b) => b.team === TEAM_RED && !b.dead);
+    if (!redsAlive) endSdRound(true, "消灭全部潜伏者");
+  }
+}
+
+function updateZombie(delta) {
+  if (!infectionStarted) {
+    infectionTimer -= delta;
+    if (infectionTimer <= 0) {
+      infectionStarted = true;
+      showToast("感染爆发！生化幽灵来袭");
+    }
+  }
+  // Savior mode: player is the savior (bonus handled at init).
+}
+
+function setupDomPoints() {
+  const defs = selectedMap.domPoints || [
+    { id: "A", x: -22, z: 0 },
+    { id: "B", x: 0, z: -18 },
+    { id: "C", x: 22, z: 0 },
+  ];
+  defs.forEach((def) => {
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(2.4, 0.1, 8, 48),
+      new THREE.MeshBasicMaterial({ color: 0x888888, transparent: true, opacity: 0.8 }),
+    );
+    ring.rotation.x = Math.PI / 2;
+    ring.position.set(def.x, 0.1, def.z);
+    scene.add(ring);
+    const beacon = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.08, 0.08, 6, 8),
+      new THREE.MeshBasicMaterial({ color: 0x888888, transparent: true, opacity: 0.35 }),
+    );
+    beacon.position.set(def.x, 3, def.z);
+    scene.add(beacon);
+    domPoints.push({
+      id: def.id,
+      position: new THREE.Vector3(def.x, 0, def.z),
+      owner: null,
+      progress: 0,
+      ring,
+      beacon,
+    });
+  });
+}
+
+function updateDom(delta) {
+  domPoints.forEach((point) => {
+    const playerNear = camera.position.distanceTo(point.position) < 2.6 && !playerDead;
+    const enemyNear = bots.some((b) => !b.dead && isHostileToPlayer(b) && b.group.position.distanceTo(point.position) < 2.6);
+    if (playerNear && !enemyNear && point.owner !== playerTeam) {
+      point.progress += delta / 4;
+      if (point.progress >= 1) {
+        point.owner = playerTeam;
+        point.progress = 0;
+        point.ring.material.color.setHex(0x35c4ff);
+        point.beacon.material.color.setHex(0x35c4ff);
+        showToast(`已占领 ${point.id} 点`);
+      }
+    } else if (enemyNear && !playerNear && point.owner !== TEAM_RED) {
+      point.progress += delta / 5;
+      if (point.progress >= 1) {
+        point.owner = TEAM_RED;
+        point.progress = 0;
+        point.ring.material.color.setHex(0xff5535);
+        point.beacon.material.color.setHex(0xff5535);
+      }
+    }
+    // Score ticks for owned points.
+    if (point.owner === playerTeam) domScore.blue += delta * 2;
+    else if (point.owner === TEAM_RED) domScore.red += delta * 2;
+  });
+  blueScore = Math.floor(domScore.blue);
+  redScore = Math.floor(domScore.red);
+  if (domScore.blue >= selectedMode.scoreTarget) endMatch("占领模式胜利");
+  else if (domScore.red >= selectedMode.scoreTarget) endMatch("占领模式失败");
+}
+
+function makeFlag(team) {
+  const group = new THREE.Group();
+  const pole = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.05, 0.05, 3.2, 8),
+    new THREE.MeshStandardMaterial({ color: 0x9aa2a8, roughness: 0.5, metalness: 0.4 }),
+  );
+  pole.position.y = 1.6;
+  pole.castShadow = true;
+  group.add(pole);
+  const banner = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.1, 0.7),
+    new THREE.MeshBasicMaterial({
+      color: team === TEAM_BLUE ? 0x35c4ff : 0xff5535,
+      side: THREE.DoubleSide,
+    }),
+  );
+  banner.position.set(0.58, 2.7, 0);
+  group.add(banner);
+  const base = new THREE.Mesh(
+    new THREE.TorusGeometry(1.6, 0.08, 8, 40),
+    new THREE.MeshBasicMaterial({ color: team === TEAM_BLUE ? 0x35c4ff : 0xff5535, transparent: true, opacity: 0.7 }),
+  );
+  base.rotation.x = Math.PI / 2;
+  base.position.y = 0.08;
+  group.add(base);
+  return group;
+}
+
+function setupCtf() {
+  const raw = selectedMap.ctfBases || { blue: [0, 42], red: [0, -42] };
+  const bases = {
+    blue: new THREE.Vector3(raw.blue[0], 0, raw.blue[1]),
+    red: new THREE.Vector3(raw.red[0], 0, raw.red[1]),
+  };
+  ctfState.blueHome = bases.blue.clone();
+  ctfState.redHome = bases.red.clone();
+  ctfState.blueFlag = makeFlag(TEAM_BLUE);
+  ctfState.blueFlag.position.copy(bases.blue);
+  scene.add(ctfState.blueFlag);
+  ctfState.redFlag = makeFlag(TEAM_RED);
+  ctfState.redFlag.position.copy(bases.red);
+  scene.add(ctfState.redFlag);
+  ctfState.blueCaps = 0;
+  ctfState.redCaps = 0;
+  ctfState.playerCarrying = false;
+}
+
+function updateCtf(delta) {
+  if (!ctfState.redFlag) return;
+  // Pick up the enemy (red) flag by touching it.
+  if (!ctfState.playerCarrying && !playerDead) {
+    if (camera.position.distanceTo(ctfState.redFlag.position) < 2.2) {
+      ctfState.playerCarrying = true;
+      ctfState.redFlag.visible = false;
+      showToast("已夺取敌方军旗！带回基地");
+      pushKillfeed("<b>你</b> 夺取了潜伏者军旗");
+      playTone(660, 0.12, "square", 0.2);
+    }
+  }
+  // Carry the flag with the player.
+  if (ctfState.playerCarrying) {
+    ctfState.redFlag.position.copy(camera.position).setY(0);
+    ctfState.redFlag.visible = true;
+    // Score by returning to the blue base.
+    if (camera.position.distanceTo(ctfState.blueHome) < 2.6) {
+      ctfState.playerCarrying = false;
+      ctfState.blueCaps += 1;
+      blueScore = ctfState.blueCaps;
+      ctfState.redFlag.position.copy(ctfState.redHome);
+      showToast(`夺旗成功！${ctfState.blueCaps}/${selectedMode.flagTarget}`);
+      pushKillfeed(`<b>你</b> 夺旗得分 ${ctfState.blueCaps}/${selectedMode.flagTarget}`);
+      if (ctfState.blueCaps >= selectedMode.flagTarget) endMatch("夺旗模式胜利");
+    }
+  }
+  updateHud();
+}
+
+function updateObjectives(delta) {
+  if (matchEnded) return;
+  if (selectedMode.bomb) updateBomb(delta);
+  if (selectedMode.zombie) updateZombie(delta);
+  if (selectedMode.dom) updateDom(delta);
+  if (selectedMode.ctf) updateCtf(delta);
 }
 
 function updateDecals(delta) {
@@ -3307,6 +4538,8 @@ function updateHud() {
   setHudText("kills", ui.kills, String(kills));
   setHudText("wave", ui.wave, String(wave));
   setHudText("streak", ui.streak, String(streak));
+  setHudText("blueScore", ui.blueScoreHud, String(blueScore));
+  setHudText("redScore", ui.redScoreHud, String(redScore));
   updateInventoryHud();
   if (ui.weaponName) {
     const weaponLabel =
@@ -3379,11 +4612,20 @@ function animate() {
   if (!paused) {
     gameTime += delta;
     fireCooldown = Math.max(0, fireCooldown - delta);
-    if (firing && currentWeaponType === "rifle") shoot();
+
+    // Respawn countdown.
+    if (playerDead && respawnTimer > 0) {
+      respawnTimer -= delta;
+      setHudText("objective", ui.objectiveText, `阵亡 · ${Math.ceil(respawnTimer)} 秒后复活`);
+      if (respawnTimer <= 0) respawnPlayer();
+    }
+
+    if (!playerDead && firing && currentWeaponType === "rifle") shoot();
     updatePlayer(delta);
     updateBots(delta);
     updateGrenades(delta);
     updateDecals(delta);
+    updateObjectives(delta);
     // Decay mouse velocity for weapon sway.
     lastMouseX *= Math.max(0, 1 - delta * 8);
     lastMouseY *= Math.max(0, 1 - delta * 8);
@@ -3393,6 +4635,33 @@ function animate() {
     if (playerModel) {
       playerModel.position.set(camera.position.x, camera.position.y - EYE_HEIGHT, camera.position.z);
       playerModel.rotation.y = yaw + Math.PI;
+      // Procedural walk cycle: legs/arms swing on the head-bob phase (already
+      // synced to footstep cadence); ease to an idle breathing pose when still.
+      const limbs = playerModel.userData.limbs;
+      if (limbs && limbs.leftLeg) {
+        const hSpeed = delta > 0 ? player.velocity.length() / delta : 0;
+        const targetBlend = !playerDead && grounded && hSpeed > 0.4 ? Math.min(1, hSpeed / 4.8) : 0;
+        playerAnimBlend += (targetBlend - playerAnimBlend) * Math.min(1, delta * 10);
+        const phase = headBobPhase * 2;
+        const legSwing = Math.sin(phase) * 0.62 * playerAnimBlend;
+        const armSwing = Math.sin(phase) * 0.3 * playerAnimBlend;
+        limbs.leftLeg.rotation.x = legSwing;
+        limbs.rightLeg.rotation.x = -legSwing;
+        const idleBreath = Math.sin(gameTime * 2.1) * 0.035 * (1 - playerAnimBlend);
+        limbs.leftArm.rotation.x = -0.5 + armSwing + idleBreath;
+        limbs.rightArm.rotation.x = -0.5 - armSwing + idleBreath;
+        // Relax the elbows-out tuck into a natural swing while moving.
+        limbs.leftArm.rotation.z = -0.35 * (1 - playerAnimBlend * 0.6);
+        limbs.rightArm.rotation.z = 0.35 * (1 - playerAnimBlend * 0.6);
+      }
+      // Death feedback: topple the model onto its back and sink slightly.
+      const toppleTarget = playerDead ? -Math.PI / 2 : 0;
+      playerModel.rotation.x += (toppleTarget - playerModel.rotation.x) * Math.min(1, delta * 6);
+      if (playerDead) playerModel.position.y -= 0.35 * Math.min(1, Math.abs(playerModel.rotation.x) / (Math.PI / 2));
+      // Hit feedback: decay a red emissive pulse on the armor.
+      playerHitFlash = Math.max(0, playerHitFlash - delta);
+      const armorMat = playerModel.userData.armorMat;
+      if (armorMat) armorMat.emissive.setRGB(playerHitFlash * 2.2, 0, 0);
     }
     // Update stamina bar every frame (continuous change).
     if (ui.staminaFill) {
