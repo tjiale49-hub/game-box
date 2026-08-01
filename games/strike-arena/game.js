@@ -35,6 +35,7 @@ const ui = {
   blueNameHud: document.querySelector("#blueNameHud"),
   redNameHud: document.querySelector("#redNameHud"),
   crosshair: document.querySelector("#crosshair"),
+  scope: document.querySelector("#scopeOverlay"),
   killfeed: document.querySelector("#killfeed"),
   scoreboard: document.querySelector("#scoreboardOverlay"),
   settings: document.querySelector("#settingsPanel"),
@@ -65,11 +66,9 @@ let enemyTexture;
 let enemyTextures = [];
 let enemyActionTexture;
 let enemyFrames = {};
-let sceneVideo;
-let sceneVideoTexture;
-let cityVideo;
-let cityVideoTexture;
-let scenicTexture;
+let urbanBackdropTexture;
+let natureBackdropTexture;
+let alpineBackdropTexture;
 let buildingFacades = {};
 let weapon;
 let muzzleLight;
@@ -1060,7 +1059,9 @@ function loadProjectTextures() {
   const loadTexture = (src) => textureLoader.load(src, (texture) => {
     texture.needsUpdate = true;
   });
-  scenicTexture = textureLoader.load("../../assets/strike-arena-hero.png");
+  urbanBackdropTexture = loadTexture("../../assets/strike-urban-backdrop-v2.jpg");
+  natureBackdropTexture = loadTexture("../../assets/strike-nature-backdrop-v2.jpg");
+  alpineBackdropTexture = loadTexture("../../assets/strike-alpine-backdrop-v2.jpg");
   enemyTextures = [
     "../../assets/strike-enemy-operator-game.png",
     "../../assets/strike-enemy-scout-game.png",
@@ -1100,29 +1101,14 @@ function loadProjectTextures() {
     industrial: loadFacade("../../assets/building-industrial.jpg"),
     night: loadFacade("../../assets/building-night.jpg"),
   };
-  if (selectedMap.nature) {
-    sceneVideo = document.createElement("video");
-    sceneVideo.src = "../../assets/strike-remotion-scene.mp4";
-    sceneVideo.muted = true;
-    sceneVideo.loop = true;
-    sceneVideo.playsInline = true;
-    sceneVideo.autoplay = true;
-    sceneVideo.preload = "auto";
-    sceneVideo.play().catch(() => {});
-    sceneVideoTexture = new THREE.VideoTexture(sceneVideo);
-  } else {
-    cityVideo = document.createElement("video");
-    cityVideo.src = "../../assets/strike-city-scene.mp4";
-    cityVideo.muted = true;
-    cityVideo.loop = true;
-    cityVideo.playsInline = true;
-    cityVideo.autoplay = true;
-    cityVideo.preload = "auto";
-    cityVideo.play().catch(() => {});
-    cityVideoTexture = new THREE.VideoTexture(cityVideo);
-  }
   enemyTexture = enemyTextures[0];
-  [scenicTexture, sceneVideoTexture, cityVideoTexture, ...Object.values(enemyFrames).flat(), ...Object.values(buildingFacades)].filter(Boolean).forEach((texture) => {
+  [
+    urbanBackdropTexture,
+    natureBackdropTexture,
+    alpineBackdropTexture,
+    ...Object.values(enemyFrames).flat(),
+    ...Object.values(buildingFacades),
+  ].filter(Boolean).forEach((texture) => {
     if (colorSpace) texture.colorSpace = colorSpace;
     texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
   });
@@ -1466,6 +1452,11 @@ function createArena() {
 }
 
 function buildDefaultLayout() {
+  if (selectedMap.nature) {
+    buildNaturalCombatZone();
+    return;
+  }
+
   // Large enterable single-storey buildings (walk inside, room by room).
   const enterable = [
     [-22, -16, 16, 12, 4.2],
@@ -1510,6 +1501,49 @@ function buildDefaultLayout() {
   ring.position.set(0, 0.08, 0);
   ring.rotation.x = Math.PI / 2;
   scene.add(ring);
+}
+
+function buildNaturalCombatZone() {
+  const rockMat = makeMaterial(selectedMap.nature === "snow" ? 0x9daeb8 : 0x4f554c, 0.95, 0.01);
+  const bunkerMat = makeMaterial(selectedMap.concrete, 0.9, 0.03);
+  const roofMat = makeMaterial(selectedMap.nature === "snow" ? 0x394854 : 0x252c27, 0.72, 0.14);
+  const timberMat = makeMaterial(0x4e3b2c, 0.9, 0.01);
+
+  const bunkers = [
+    [-24, -18, 8.5, 5.2, 2.6],
+    [23, -14, 7.4, 5.6, 2.4],
+    [-19, 18, 7.2, 4.8, 2.3],
+    [21, 21, 8.2, 5.2, 2.5],
+  ];
+  bunkers.forEach(([x, z, w, d, h], index) => {
+    addBox([x, h / 2, z, w, h, d], bunkerMat, true);
+    const roof = addBox([x, h + 0.16, z, w + 0.8, 0.28, d + 0.8], roofMat, false);
+    roof.rotation.z = index % 2 ? 0.035 : -0.035;
+    addBox([x, h * 0.58, z - d / 2 - 0.04, w * 0.42, h * 0.28, 0.12], roofMat, false);
+  });
+
+  const rockCover = [
+    [-10, -27, 7, 2.4, 3.5], [8, -24, 6, 2.1, 3.8],
+    [-30, 2, 6.5, 2.5, 4], [31, 4, 7.5, 2.8, 4.5],
+    [-8, 4, 6, 1.9, 3.2], [10, 8, 7, 2.2, 3.4],
+    [-5, 30, 8, 2.5, 3.5], [10, 31, 6.5, 2.2, 3.2],
+  ];
+  rockCover.forEach(([x, z, sx, sy, sz], index) => {
+    const cover = addBox([x, sy / 2, z, sx, sy, sz], rockMat, true);
+    cover.rotation.y = (index % 3 - 1) * 0.08;
+  });
+
+  [[-13, -5], [14, -3], [-12, 28], [15, 27]].forEach(([x, z], index) => {
+    for (let i = 0; i < 4; i += 1) {
+      const log = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 4.8, 10), timberMat);
+      log.rotation.z = Math.PI / 2;
+      log.rotation.y = index % 2 ? 0.2 : -0.2;
+      log.position.set(x, 0.22 + i * 0.27, z + i * 0.08);
+      log.castShadow = true;
+      log.receiveShadow = true;
+      scene.add(log);
+    }
+  });
 }
 
 function buildDesertTown() {
@@ -1674,79 +1708,35 @@ function buildSnowBase() {
 }
 
 function createCinematicBackdrop() {
-  if (!selectedMap.nature) {
-    // Urban maps: distant animated city skyline (Remotion-rendered video).
-    if (!cityVideoTexture) return;
-    const cityBackdrop = new THREE.Mesh(
-      new THREE.PlaneGeometry(170, 82),
-      new THREE.MeshBasicMaterial({
-        map: cityVideoTexture,
-        color: 0xffffff,
-        transparent: true,
-        opacity: isNightMap() ? 0.96 : 0.82,
-        depthWrite: false,
-        fog: false,
-      }),
-    );
-    cityBackdrop.position.set(0, 26, -64);
-    cityBackdrop.renderOrder = -20;
-    scene.add(cityBackdrop);
+  const industrialNature = ["coast", "harbor", "quarry"];
+  const backdropTexture = selectedMap.nature === "snow"
+    ? alpineBackdropTexture
+    : (!selectedMap.nature || industrialNature.includes(selectedMap.nature))
+      ? urbanBackdropTexture
+      : natureBackdropTexture;
+  if (!backdropTexture) return;
 
-    const cityVeil = new THREE.Mesh(
-      new THREE.PlaneGeometry(170, 82),
-      new THREE.MeshBasicMaterial({
-        color: isNightMap() ? 0x050810 : 0x1a2030,
-        transparent: true,
-        opacity: isNightMap() ? 0.12 : 0.2,
-        depthWrite: false,
-      }),
-    );
-    cityVeil.position.set(0, 26, -63.8);
-    cityVeil.renderOrder = -19;
-    scene.add(cityVeil);
-    return;
-  }
-  const backdrop = new THREE.Mesh(
-    new THREE.PlaneGeometry(170, 82),
-    new THREE.MeshBasicMaterial({
-      map: sceneVideoTexture || scenicTexture,
-      color: 0xffffff,
-      transparent: true,
-      opacity: selectedMap.nature === "forest" ? 0.92 : 0.76,
-      depthWrite: false,
-      fog: false,
-    }),
-  );
-  backdrop.position.set(0, 26, -64);
-  backdrop.renderOrder = -20;
-  scene.add(backdrop);
-
-  const duskVeil = new THREE.Mesh(
-    new THREE.PlaneGeometry(170, 82),
-    new THREE.MeshBasicMaterial({
-      color: selectedMap.nature === "snow" ? 0xcad7dc : 0x07110d,
-      transparent: true,
-      opacity: selectedMap.nature === "forest" ? 0.1 : 0.16,
-      depthWrite: false,
-    }),
-  );
-  duskVeil.position.set(0, 26, -63.8);
-  duskVeil.renderOrder = -19;
-  scene.add(duskVeil);
-
-  const ridgeMat = new THREE.MeshBasicMaterial({
-    color: selectedMap.nature === "snow" ? 0x233444 : 0x07140e,
-    transparent: true,
-    opacity: 0.62,
-    depthWrite: false,
+  const geometry = new THREE.PlaneGeometry(170, 95.625);
+  const material = new THREE.MeshBasicMaterial({
+    map: backdropTexture,
+    color: isNightMap() ? 0xa8b0bd : 0xffffff,
+    depthWrite: true,
+    depthTest: true,
+    fog: false,
   });
-  for (let i = 0; i < 3; i += 1) {
-    const ridge = new THREE.Mesh(new THREE.PlaneGeometry(90 - i * 14, 12 + i * 2), ridgeMat.clone());
-    ridge.position.set((i - 1) * 24, 6 + i * 1.2, -63.4 + i * 0.2);
-    ridge.rotation.z = (i - 1) * 0.05;
-    ridge.renderOrder = -18 + i;
-    scene.add(ridge);
-  }
+  const sides = [
+    [0, 30, -64, 0],
+    [0, 30, 64, Math.PI],
+    [-64, 30, 0, Math.PI / 2],
+    [64, 30, 0, -Math.PI / 2],
+  ];
+  sides.forEach(([x, y, z, rotationY]) => {
+    const backdrop = new THREE.Mesh(geometry, material);
+    backdrop.position.set(x, y, z);
+    backdrop.rotation.y = rotationY;
+    backdrop.renderOrder = -20;
+    scene.add(backdrop);
+  });
 }
 
 function addBox([x, y, z, sx, sy, sz], material, collidable) {
@@ -2039,6 +2029,11 @@ function createArenaProps() {
     [-25, 27],
   ];
   propSpots.forEach(([x, z], index) => {
+    if (selectedMap.nature) {
+      addBox([x, 0.5, z, 1.4, 1, 1.15], crateMat, true);
+      if (index % 2 === 0) addBox([x + 1.25, 0.34, z + 0.45, 1.2, 0.68, 0.9], crateMat, true);
+      return;
+    }
     const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.48, 1.2, 20), barrelMat);
     barrel.position.set(x, 0.6, z);
     barrel.castShadow = true;
@@ -2356,13 +2351,13 @@ function buildRifleModel() {
 
   // PBR materials for realistic gun finish.
   const receiverMat = new THREE.MeshStandardMaterial({
-    color: 0x1a1e24, roughness: 0.28, metalness: 0.82,
+    color: 0x303844, roughness: 0.3, metalness: 0.76,
   });
   const barrelMat = new THREE.MeshStandardMaterial({
-    color: 0x0e1114, roughness: 0.22, metalness: 0.92,
+    color: 0x222a32, roughness: 0.25, metalness: 0.86,
   });
   const polymerMat = new THREE.MeshStandardMaterial({
-    color: 0x232a32, roughness: 0.72, metalness: 0.06,
+    color: 0x343d47, roughness: 0.72, metalness: 0.06,
   });
   const railMat = new THREE.MeshStandardMaterial({
     color: 0x2c333b, roughness: 0.38, metalness: 0.7,
@@ -2372,7 +2367,7 @@ function buildRifleModel() {
     emissive: selectedMap.glow, emissiveIntensity: 0.3,
   });
   const magMat = new THREE.MeshStandardMaterial({
-    color: 0x14181c, roughness: 0.55, metalness: 0.4,
+    color: 0x29313a, roughness: 0.56, metalness: 0.34,
   });
   const lensMat = new THREE.MeshStandardMaterial({
     color: 0x1a3a5c, roughness: 0.05, metalness: 0.1,
@@ -2740,6 +2735,14 @@ function createViewModel() {
   else if (currentWeaponType === "grenade") buildGrenadeModel();
   else buildRifleModel();
   camera.add(weapon);
+  if (!camera.userData.viewModelLightsReady) {
+    const coolKey = new THREE.PointLight(0xdbe9ff, 11, 4.2, 1.8);
+    coolKey.position.set(-0.7, 0.55, 0.6);
+    const warmFill = new THREE.PointLight(0xffc899, 6, 3.5, 2);
+    warmFill.position.set(0.75, -0.15, 0.15);
+    camera.add(coolKey, warmFill);
+    camera.userData.viewModelLightsReady = true;
+  }
   if (!camera.parent) scene.add(camera);
   // Keep the third-person model's weapon in sync.
   if (playerModel) updatePlayerModelWeapon();
@@ -3120,12 +3123,9 @@ function spawnBot(team = TEAM_RED, options = {}) {
   const actionTexture = enemyFrames.aim?.[0] || enemyActionTexture || botTexture;
   if (botTexture) {
     [armorMat, clothMat, skinMat].forEach((material) => {
-      material.transparent = true;
-      material.opacity = 0.14;
-      material.depthWrite = false;
+      material.colorWrite = false;
     });
-    visorMat.transparent = true;
-    visorMat.opacity = 0.22;
+    visorMat.colorWrite = false;
   }
 
   const parts = [
@@ -3185,10 +3185,10 @@ function spawnBot(team = TEAM_RED, options = {}) {
       map: idleTexture,
       color: 0xffffff,
       transparent: true,
-      alphaTest: 0.04,
-      fog: false,
-      depthTest: false,
-      depthWrite: false,
+      alphaTest: 0.1,
+      fog: true,
+      depthTest: true,
+      depthWrite: true,
     });
     const visualHeight = 3.8 + Math.random() * 0.3;
     const visualWidth = botTexture === enemyTextures[2] ? 2.26 : 1.96 + Math.random() * 0.16;
@@ -3196,10 +3196,24 @@ function spawnBot(team = TEAM_RED, options = {}) {
     visual.scale.set(visualWidth, visualHeight, 1);
     visual.position.set(0, 1.72 + (visualHeight - 3.8) * 0.08, -0.08);
     visual.userData.hitZone = "torso";
-    visual.renderOrder = 100;
+    visual.renderOrder = 2;
     group.add(visual);
     botMeshes.push(visual);
   }
+
+  const contactShadow = new THREE.Mesh(
+    new THREE.CircleGeometry(0.72, 24),
+    new THREE.MeshBasicMaterial({
+      color: 0x050607,
+      transparent: true,
+      opacity: 0.34,
+      depthWrite: false,
+    }),
+  );
+  contactShadow.rotation.x = -Math.PI / 2;
+  contactShadow.position.set(0, 0.018, 0.04);
+  contactShadow.scale.set(1, 0.48, 1);
+  group.add(contactShadow);
 
   const spawn = randomSpawnPoint(team);
   group.position.set(spawn.x, 0, spawn.z);
@@ -3636,15 +3650,16 @@ function spawnDownedSprite(bot) {
     map: texture,
     color: 0xffffff,
     transparent: true,
-    alphaTest: 0.04,
-    fog: false,
-    depthWrite: false,
+    alphaTest: 0.1,
+    fog: true,
+    depthTest: true,
+    depthWrite: true,
   });
   const sprite = new THREE.Sprite(material);
   sprite.position.copy(bot.group.position);
   sprite.position.y = 1.18;
   sprite.scale.set(2.45, 2.2, 1);
-  sprite.renderOrder = 80;
+  sprite.renderOrder = 2;
   scene.add(sprite);
   decals.push({ mesh: sprite, life: 1.2 });
 }
@@ -4650,6 +4665,11 @@ function updateWeapon(delta) {
     const wide = firing || player.velocity.lengthSq() > 0.0001 || recoilPitch > 0.02 || !grounded;
     ui.crosshair.classList.toggle("is-wide", wide);
     ui.crosshair.classList.toggle("is-ads", adsLerp > 0.7);
+  }
+  if (ui.scope) {
+    const scoped = isRifle && selectedWeapon === WEAPONS.sniper && adsLerp > 0.72;
+    ui.scope.classList.toggle("is-visible", scoped);
+    ui.scope.setAttribute("aria-hidden", String(!scoped));
   }
 }
 
