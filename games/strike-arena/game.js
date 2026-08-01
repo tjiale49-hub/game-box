@@ -91,6 +91,8 @@ let lastShotAt = 0;
 let firing = false;
 let recoilPitch = 0;
 let recoilYaw = 0;
+let recoilPitchVelocity = 0;
+let recoilYawVelocity = 0;
 let shotsFired = 0;
 let shotsHit = 0;
 let bestStreak = 0;
@@ -110,6 +112,9 @@ let stamina = 100;
 let sprinting = false;
 let headBobPhase = 0;
 let headBobAmount = 0;
+let stabilizedBob = 0;
+let stabilizedBobVelocity = 0;
+let stabilizedRoll = 0;
 let lastFootstep = 0;
 const FOOTSTEP_INTERVAL_WALK = 0.42;
 const FOOTSTEP_INTERVAL_SPRINT = 0.3;
@@ -229,8 +234,13 @@ const meshToBot = new Map();
 // Object pools for transient shot effects (initialized in initPools after THREE loads).
 const tracerPool = [];
 const sparkPool = [];
+const projectilePool = [];
+const ballisticSurfaces = [];
+const projectileTargets = [];
 let tracerCursor = 0;
 let sparkCursor = 0;
+let projectileCursor = 0;
+const PROJECTILE_POOL_SIZE = 48;
 // Pre-created radar dot element pool (updated in place each frame instead of recreate).
 const radarDots = [];
 // Cached HUD state for dirty-checking text/style updates.
@@ -245,6 +255,13 @@ let tmpV5 = null;
 let UP_VECTOR = null;
 // Cached noise buffer for the noise-based gunshot sound.
 let shotNoiseBuffer = null;
+let sharedBoxGeometry = null;
+let sunLight = null;
+let lowQualityMode = false;
+let radarUpdateTimer = 0;
+let performanceWindow = 0;
+let performanceFrames = 0;
+let performanceDrops = 0;
 const player = {
   position: null,
   velocity: null,
@@ -764,6 +781,8 @@ const WEAPONS = {
     recoil: 0.012,
     reloadMs: 1050,
     tracer: 0xffd166,
+    muzzleVelocity: 880,
+    drag: 0.055,
   },
   smg: {
     name: "K-VECTOR SMG",
@@ -775,6 +794,8 @@ const WEAPONS = {
     recoil: 0.017,
     reloadMs: 920,
     tracer: 0x18f5ff,
+    muzzleVelocity: 430,
+    drag: 0.085,
   },
   sniper: {
     name: "M-700 MARKSMAN",
@@ -786,6 +807,8 @@ const WEAPONS = {
     recoil: 0.05,
     reloadMs: 1450,
     tracer: 0xfff0a6,
+    muzzleVelocity: 860,
+    drag: 0.038,
   },
   pistol: {
     name: "USP-45 TACTICAL",
@@ -797,6 +820,8 @@ const WEAPONS = {
     recoil: 0.02,
     reloadMs: 900,
     tracer: 0xffe08a,
+    muzzleVelocity: 270,
+    drag: 0.095,
   },
   shotgun: {
     name: "M-870 BREACHER",
@@ -809,6 +834,8 @@ const WEAPONS = {
     reloadMs: 1600,
     tracer: 0xffb458,
     pellets: 8,
+    muzzleVelocity: 410,
+    drag: 0.12,
   },
 };
 
@@ -939,6 +966,36 @@ function playShotSound() {
   sub.stop(now + bodyDuration);
 }
 
+function playSpatialBotShot(position) {
+  if (!audioContext || masterVolume <= 0) return;
+  const now = audioContext.currentTime;
+  const source = audioContext.createBufferSource();
+  const filter = audioContext.createBiquadFilter();
+  const gain = audioContext.createGain();
+  const panner = audioContext.createPanner();
+  const relative = tmpV4.copy(position).sub(camera.position);
+  source.buffer = getShotNoiseBuffer();
+  filter.type = "lowpass";
+  filter.frequency.setValueAtTime(1350, now);
+  gain.gain.setValueAtTime(0.22 * masterVolume, now);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+  panner.panningModel = "HRTF";
+  panner.distanceModel = "inverse";
+  panner.refDistance = 2;
+  panner.maxDistance = 52;
+  panner.rolloffFactor = 1.15;
+  if (panner.positionX) {
+    panner.positionX.setValueAtTime(relative.x, now);
+    panner.positionY.setValueAtTime(relative.y, now);
+    panner.positionZ.setValueAtTime(relative.z, now);
+  } else {
+    panner.setPosition(relative.x, relative.y, relative.z);
+  }
+  source.connect(filter).connect(gain).connect(panner).connect(audioContext.destination);
+  source.start(now);
+  source.stop(now + 0.12);
+}
+
 function playHitSound(critical) {
   playTone(critical ? 980 : 620, 0.08, "sine", critical ? 0.16 : 0.1);
 }
@@ -1022,11 +1079,26 @@ function loadProjectTextures() {
   };
   enemyActionTexture = enemyFrames.aim[0];
   // Photorealistic building facade textures (generated assets).
+  const loadFacade = (src) => {
+    const facadeTexture = textureLoader.load(src, (loadedTexture) => {
+      const bindings = loadedTexture.userData.pendingBindings || [];
+      bindings.forEach(({ texture, material }) => {
+        texture.image = loadedTexture.image;
+        texture.needsUpdate = true;
+        material.map = texture;
+        if (material.userData.facadeEmissive) material.emissiveMap = texture;
+        material.needsUpdate = true;
+      });
+      bindings.length = 0;
+    });
+    facadeTexture.userData.pendingBindings = [];
+    return facadeTexture;
+  };
   buildingFacades = {
-    concrete: textureLoader.load("../../assets/building-concrete.jpg"),
-    brick: textureLoader.load("../../assets/building-brick.jpg"),
-    industrial: textureLoader.load("../../assets/building-industrial.jpg"),
-    night: textureLoader.load("../../assets/building-night.jpg"),
+    concrete: loadFacade("../../assets/building-concrete.jpg"),
+    brick: loadFacade("../../assets/building-brick.jpg"),
+    industrial: loadFacade("../../assets/building-industrial.jpg"),
+    night: loadFacade("../../assets/building-night.jpg"),
   };
   if (selectedMap.nature) {
     sceneVideo = document.createElement("video");
@@ -1217,7 +1289,7 @@ function initScene() {
     antialias: true,
     powerPreference: "high-performance",
   });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.8));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.65));
   renderer.setSize(window.innerWidth, window.innerHeight);
   if (THREE.SRGBColorSpace) renderer.outputColorSpace = THREE.SRGBColorSpace;
   if (THREE.ACESFilmicToneMapping) {
@@ -1226,6 +1298,7 @@ function initScene() {
   }
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  sharedBoxGeometry = new THREE.BoxGeometry(1, 1, 1);
   loadProjectTextures();
 
   clock = new THREE.Clock();
@@ -1253,19 +1326,19 @@ function initScene() {
   const ambient = new THREE.AmbientLight(0x1a2030, 0.35);
   scene.add(ambient);
 
-  const sun = new THREE.DirectionalLight(0xfff4e0, 2.4);
-  sun.position.set(-12, 24, 10);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.camera.left = -62;
-  sun.shadow.camera.right = 62;
-  sun.shadow.camera.top = 62;
-  sun.shadow.camera.bottom = -62;
-  sun.shadow.camera.near = 0.5;
-  sun.shadow.camera.far = 90;
-  sun.shadow.bias = -0.0004;
-  sun.shadow.normalBias = 0.02;
-  scene.add(sun);
+  sunLight = new THREE.DirectionalLight(0xfff4e0, 2.4);
+  sunLight.position.set(-12, 24, 10);
+  sunLight.castShadow = true;
+  sunLight.shadow.mapSize.set(2048, 2048);
+  sunLight.shadow.camera.left = -62;
+  sunLight.shadow.camera.right = 62;
+  sunLight.shadow.camera.top = 62;
+  sunLight.shadow.camera.bottom = -62;
+  sunLight.shadow.camera.near = 0.5;
+  sunLight.shadow.camera.far = 90;
+  sunLight.shadow.bias = -0.0004;
+  sunLight.shadow.normalBias = 0.02;
+  scene.add(sunLight);
 
   // Secondary bounce light (cool fill from opposite side).
   const bounce = new THREE.DirectionalLight(0x8ab4d4, 0.5);
@@ -1313,11 +1386,14 @@ function initScene() {
   applyScenarioText();
   createArena();
   initPools();
+  initProjectilePool();
   initRadarDots();
   initShellPool();
   createViewModel();
   createPlayerModel();
   initModeSystems();
+  const constrainedDevice = (navigator.deviceMemory && navigator.deviceMemory <= 4) || navigator.hardwareConcurrency <= 4;
+  applyQualityMode(Boolean(constrainedDevice), false);
   updateHud();
   updateInventoryHud();
 }
@@ -1355,6 +1431,7 @@ function createArena() {
   floor.rotation.x = -Math.PI / 2;
   floor.receiveShadow = true;
   scene.add(floor);
+  ballisticSurfaces.push(floor);
 
   const grid = new THREE.GridHelper(130, 65, selectedMap.glow, 0x1d2227);
   grid.material.opacity = selectedMode === MODES.training ? 0.16 : 0.08;
@@ -1528,6 +1605,7 @@ function buildFactory() {
     tank.castShadow = true;
     tank.receiveShadow = true;
     scene.add(tank);
+    ballisticSurfaces.push(tank);
     obstacles.push({ minX: x - 2.6, maxX: x + 2.6, minZ: z - 2.6, maxZ: z + 2.6 });
   });
 
@@ -1575,6 +1653,7 @@ function buildSnowBase() {
     drift.castShadow = true;
     drift.receiveShadow = true;
     scene.add(drift);
+    ballisticSurfaces.push(drift);
     obstacles.push({ minX: x - r * 0.8, maxX: x + r * 0.8, minZ: z - r * 0.8, maxZ: z + r * 0.8 });
   });
 
@@ -1671,11 +1750,13 @@ function createCinematicBackdrop() {
 }
 
 function addBox([x, y, z, sx, sy, sz], material, collidable) {
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), material);
+  const mesh = new THREE.Mesh(sharedBoxGeometry, material);
+  mesh.scale.set(sx, sy, sz);
   mesh.position.set(x, y, z);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   scene.add(mesh);
+  ballisticSurfaces.push(mesh);
   if (collidable) {
     obstacles.push({
       minX: x - sx / 2 - player.radius,
@@ -1727,27 +1808,26 @@ function facadeMaterial(sideWidth, h) {
   const facade = getFacadeTexture();
   const night = isNightMap();
   const tex = facade.clone();
+  const ready = Boolean(facade.image && facade.image.complete);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
   tex.repeat.set(Math.max(0.5, sideWidth / FACADE_TILE), Math.max(0.5, h / FACADE_TILE));
-  tex.needsUpdate = true;
-  if (facade.image && facade.image.complete) {
+  if (ready) {
+    tex.image = facade.image;
     tex.needsUpdate = true;
-  } else if (facade.image && facade.image.addEventListener) {
-    facade.image.addEventListener("load", () => {
-      tex.needsUpdate = true;
-    }, { once: true });
   }
   const mat = new THREE.MeshStandardMaterial({
-    map: tex,
+    map: ready ? tex : null,
     roughness: 0.88,
     metalness: 0.05,
   });
   if (night) {
     mat.emissive = new THREE.Color(0xffffff);
-    mat.emissiveMap = tex;
+    mat.emissiveMap = ready ? tex : null;
     mat.emissiveIntensity = 0.5;
+    mat.userData.facadeEmissive = true;
   }
+  if (!ready) facade.userData.pendingBindings.push({ texture: tex, material: mat });
   return mat;
 }
 
@@ -1764,6 +1844,7 @@ function createBuilding(x, z, w, d, h, index) {
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   scene.add(mesh);
+  ballisticSurfaces.push(mesh);
 
   obstacles.push({
     minX: x - w / 2 - player.radius,
@@ -1885,6 +1966,7 @@ function createEnterableBuilding(x, z, w, d, h, index) {
   floor.position.set(x, 0.03, z);
   floor.receiveShadow = true;
   scene.add(floor);
+  ballisticSurfaces.push(floor);
 
   // Perimeter walls with a front and back door.
   const frontDoorX = (rng() - 0.5) * w * 0.4;
@@ -3283,7 +3365,8 @@ function shoot() {
   }
 
   ammo -= 1;
-  shotsFired += 1;
+  const pelletCount = selectedWeapon.pellets || 1;
+  shotsFired += pelletCount;
   fireCooldown = selectedWeapon.fireRate;
   lastShotAt = performance.now();
 
@@ -3303,14 +3386,14 @@ function shoot() {
   // Deterministic recoil pattern (CS-style).
   const pattern = recoilPattern[Math.min(recoilIndex, RECOIL_PATTERN_LENGTH - 1)];
   const recoilMult = selectedWeapon.recoil * (adsLerp > 0.5 ? 0.6 : 1);
-  recoilPitch += pattern.v * recoilMult * 0.8;
-  recoilYaw += pattern.h * recoilMult * 0.5;
+  recoilPitchVelocity += pattern.v * recoilMult * 48;
+  recoilYawVelocity += pattern.h * recoilMult * 32;
   recoilIndex = Math.min(recoilIndex + 1, RECOIL_PATTERN_LENGTH - 1);
 
   playShotSound();
   ejectShellCasing();
 
-  // Raycast with spread (reduced when ADS).
+  // Physical projectiles with spread (reduced when ADS).
   raycaster.setFromCamera({ x: 0, y: 0 }, camera);
   const moving = player.velocity.lengthSq() > 0.0001;
   const adsSpreadMod = adsLerp > 0.5 ? 0.35 : 1;
@@ -3319,37 +3402,17 @@ function shoot() {
   raycaster.ray.direction.x += (Math.random() - 0.5) * spread;
   raycaster.ray.direction.y += (Math.random() - 0.5) * spread;
   raycaster.ray.direction.normalize();
-  const hits = raycaster.intersectObjects(botMeshes, false);
-  if (hits.length) {
-    const mesh = hits[0].object;
-    const bot = meshToBot.get(mesh);
-    if (bot && !bot.dead) {
-      // No friendly fire outside FFA.
-      const friendly = !selectedMode.ffa && !isHostileToPlayer(bot);
-      if (friendly) {
-        spawnTracer(hits[0].point, 0x88aaff);
-      } else {
-        shotsHit += 1;
-        const critical = mesh.userData.hitZone === "head" || hits[0].point.y - bot.group.position.y > 1.34;
-        applyBotDamage(bot, critical ? selectedWeapon.critical : selectedWeapon.damage, true);
-        spawnTracer(hits[0].point, critical ? 0xffd166 : selectedWeapon.tracer);
-        spawnImpact(hits[0].point, critical ? 0xffd166 : selectedMap.glow);
-        showHitmarker();
-        playHitSound(critical);
-        if (bot.health <= 0) {
-          showToast(critical ? "精准命中 +1" : "击破 +1");
-        }
-      }
+  const baseDirection = raycaster.ray.direction.clone();
+  for (let pellet = 0; pellet < pelletCount; pellet += 1) {
+    const direction = baseDirection.clone();
+    if (pelletCount > 1) {
+      const pelletSpread = 0.026 * adsSpreadMod * crouchMod;
+      direction.x += (Math.random() - 0.5) * pelletSpread;
+      direction.y += (Math.random() - 0.5) * pelletSpread;
+      direction.z += (Math.random() - 0.5) * pelletSpread * 0.35;
+      direction.normalize();
     }
-  } else {
-    // Bullet hole on ground/environment.
-    const envHits = raycaster.intersectObjects(scene.children, false);
-    const envHit = envHits.find((h) => h.object.isMesh && !botMeshes.includes(h.object) && h.object !== muzzleFlashMesh);
-    if (envHit && envHit.distance < 80) {
-      spawnBulletHole(envHit.point, envHit.face ? envHit.face.normal : UP_VECTOR);
-    }
-    tmpV2.copy(camera.position).addScaledVector(raycaster.ray.direction, 38);
-    spawnTracer(tmpV2, 0xffffff);
+    spawnProjectile(direction);
   }
   updateHud();
 }
@@ -3413,6 +3476,115 @@ function initPools() {
     spark.frustumCulled = false;
     scene.add(spark);
     sparkPool.push(spark);
+  }
+}
+
+function initProjectilePool() {
+  for (let i = 0; i < PROJECTILE_POOL_SIZE; i += 1) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(6), 3));
+    const material = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.92 });
+    const trail = new THREE.Line(geometry, material);
+    trail.visible = false;
+    trail.frustumCulled = false;
+    scene.add(trail);
+    projectilePool.push({
+      active: false,
+      trail,
+      position: new THREE.Vector3(),
+      velocity: new THREE.Vector3(),
+      previous: new THREE.Vector3(),
+      travel: new THREE.Vector3(),
+      tail: new THREE.Vector3(),
+      life: 0,
+      damage: 0,
+      critical: 0,
+      muzzleVelocity: 0,
+      drag: 0,
+    });
+  }
+}
+
+function spawnProjectile(direction) {
+  const projectile = projectilePool[projectileCursor];
+  projectileCursor = (projectileCursor + 1) % projectilePool.length;
+  projectile.active = true;
+  projectile.life = 1.5;
+  projectile.damage = selectedWeapon.damage;
+  projectile.critical = selectedWeapon.critical;
+  projectile.muzzleVelocity = selectedWeapon.muzzleVelocity;
+  projectile.drag = selectedWeapon.drag;
+  projectile.position.copy(camera.localToWorld(new THREE.Vector3(0.32, -0.22, -1.86)));
+  projectile.velocity.copy(direction).multiplyScalar(projectile.muzzleVelocity);
+  projectile.trail.material.color.setHex(selectedWeapon.tracer);
+  projectile.trail.material.opacity = 0.92;
+  projectile.trail.visible = true;
+}
+
+function deactivateProjectile(projectile) {
+  projectile.active = false;
+  projectile.trail.visible = false;
+}
+
+function resolveProjectileImpact(projectile, hit) {
+  const bot = meshToBot.get(hit.object);
+  if (bot && !bot.dead) {
+    const friendly = !selectedMode.ffa && !isHostileToPlayer(bot);
+    if (!friendly) {
+      shotsHit += 1;
+      const critical = hit.object.userData.hitZone === "head" || hit.point.y - bot.group.position.y > 1.34;
+      const speedRatio = Math.min(1, projectile.velocity.length() / projectile.muzzleVelocity);
+      const damage = (critical ? projectile.critical : projectile.damage) * Math.max(0.7, speedRatio);
+      applyBotDamage(bot, damage, true);
+      spawnImpact(hit.point, critical ? 0xffd166 : selectedMap.glow);
+      showHitmarker();
+      playHitSound(critical);
+      if (bot.health <= 0) showToast(critical ? "精准命中 +1" : "击破 +1");
+    }
+    return;
+  }
+
+  let normal = hit.face?.normal?.clone() || UP_VECTOR.clone();
+  if (hit.object.matrixWorld) normal.transformDirection(hit.object.matrixWorld);
+  spawnBulletHole(hit.point, normal);
+  spawnImpact(hit.point, selectedMap.glow);
+}
+
+function updateProjectiles(delta) {
+  projectileTargets.length = 0;
+  projectileTargets.push(...botMeshes, ...ballisticSurfaces);
+  for (const projectile of projectilePool) {
+    if (!projectile.active) continue;
+    projectile.previous.copy(projectile.position);
+    projectile.velocity.y -= 9.81 * delta;
+    projectile.velocity.multiplyScalar(Math.exp(-projectile.drag * delta));
+    projectile.travel.copy(projectile.velocity).multiplyScalar(delta);
+    const distance = projectile.travel.length();
+    if (distance > 0.0001) {
+      raycaster.set(projectile.previous, projectile.travel.normalize());
+      raycaster.far = distance;
+      const hits = raycaster.intersectObjects(projectileTargets, false);
+      if (hits.length) {
+        projectile.position.copy(hits[0].point);
+        resolveProjectileImpact(projectile, hits[0]);
+        deactivateProjectile(projectile);
+        updateHud();
+        continue;
+      }
+      projectile.position.addScaledVector(projectile.travel, distance);
+    }
+    projectile.life -= delta;
+    const trailLength = Math.min(2.8, distance);
+    projectile.tail.copy(projectile.position).addScaledVector(projectile.velocity, -trailLength / Math.max(1, projectile.velocity.length()));
+    const positions = projectile.trail.geometry.attributes.position.array;
+    positions[0] = projectile.tail.x;
+    positions[1] = projectile.tail.y;
+    positions[2] = projectile.tail.z;
+    positions[3] = projectile.position.x;
+    positions[4] = projectile.position.y;
+    positions[5] = projectile.position.z;
+    projectile.trail.geometry.attributes.position.needsUpdate = true;
+    if (projectile.life <= 0 || projectile.position.y < -2) deactivateProjectile(projectile);
   }
 }
 
@@ -3561,7 +3733,7 @@ function updatePlayer(delta) {
   const standHeight = player.height;
   const crouchHeight = player.height * 0.62;
   const targetHeight = standHeight + (crouchHeight - standHeight) * crouchLerp;
-  let currentY = camera.position.y + verticalVelocity * delta;
+  let currentY = camera.position.y - stabilizedBob + verticalVelocity * delta;
   if (currentY <= targetHeight) {
     currentY = targetHeight;
     verticalVelocity = 0;
@@ -3581,7 +3753,10 @@ function updatePlayer(delta) {
   }
   const bobY = Math.sin(headBobPhase * 2) * headBobAmount;
   const bobX = Math.cos(headBobPhase) * headBobAmount * 0.6;
-  camera.position.y += bobY;
+  const bobAcceleration = (bobY - stabilizedBob) * 96 - stabilizedBobVelocity * 19;
+  stabilizedBobVelocity += bobAcceleration * delta;
+  stabilizedBob += stabilizedBobVelocity * delta;
+  camera.position.y += stabilizedBob;
 
   // Footstep sounds.
   if (moveSpeed > 0.5 && grounded) {
@@ -3593,8 +3768,10 @@ function updatePlayer(delta) {
     }
   }
 
-  // Apply camera rotation with recoil.
-  camera.rotation.set(pitch + recoilPitch, yaw + recoilYaw, bobX * 0.3);
+  // Eye-like stabilization keeps footstep motion readable without making the player dizzy.
+  const rollTarget = bobX * 0.24;
+  stabilizedRoll += (rollTarget - stabilizedRoll) * Math.min(1, delta * 9);
+  camera.rotation.set(pitch + recoilPitch, yaw + recoilYaw, stabilizedRoll);
 }
 
 function collides(position) {
@@ -3875,6 +4052,7 @@ function updateBots(delta) {
       !lineBlocked(tmpV5.copy(bot.group.position).setY(bot.group.position.y + 1.35), targetPos)
     ) {
       bot.fireReact = 1;
+      playSpatialBotShot(bot.group.position);
       const accuracyMod = distance > 16 ? 0.6 : distance > 10 ? 0.8 : 1;
       const hitChance = 0.5 * accuracyMod * (movingAmount > 0.5 ? 0.7 : 1);
       if (Math.random() < hitChance) {
@@ -4417,12 +4595,17 @@ function updateWeapon(delta) {
     weaponSwayX * 0.4 + Math.sin(gameTime * 2.8) * 0.003 * (1 - adsLerp) + knifeRotZ,
   );
 
-  // Recoil recovery (rifle only).
+  // Critically damped recoil spring (rifle only).
   if (isRifle) {
-    const recover = delta * (selectedWeapon === WEAPONS.sniper ? 0.09 : 0.2);
-    recoilPitch = Math.max(0, recoilPitch - recover);
-    recoilYaw += (0 - recoilYaw) * Math.min(1, delta * 8);
-    if (!firing && recoilPitch < 0.005) {
+    const stiffness = selectedWeapon === WEAPONS.sniper ? 72 : 96;
+    const damping = selectedWeapon === WEAPONS.sniper ? 14 : 18;
+    recoilPitchVelocity += (-recoilPitch * stiffness - recoilPitchVelocity * damping) * delta;
+    recoilYawVelocity += (-recoilYaw * stiffness - recoilYawVelocity * damping) * delta;
+    recoilPitch += recoilPitchVelocity * delta;
+    recoilYaw += recoilYawVelocity * delta;
+    if (!firing && Math.abs(recoilPitch) < 0.002 && Math.abs(recoilPitchVelocity) < 0.02) {
+      recoilPitch = 0;
+      recoilPitchVelocity = 0;
       recoilIndex = 0;
     }
   }
@@ -4491,8 +4674,14 @@ function updateRadar() {
       if (dot.style.visibility !== "hidden") dot.style.visibility = "hidden";
       continue;
     }
-    const x = 69 + (bot.group.position.x - camera.position.x) * scale;
-    const y = 69 + (bot.group.position.z - camera.position.z) * scale;
+    const dx = bot.group.position.x - camera.position.x;
+    const dz = bot.group.position.z - camera.position.z;
+    const cos = Math.cos(-yaw);
+    const sin = Math.sin(-yaw);
+    const localX = dx * cos - dz * sin;
+    const localZ = dx * sin + dz * cos;
+    const x = 69 + localX * scale;
+    const y = 69 + localZ * scale;
     if (x < 6 || x > 132 || y < 6 || y > 132) {
       if (dot.style.visibility !== "hidden") dot.style.visibility = "hidden";
       continue;
@@ -4606,6 +4795,29 @@ function endMatch(title) {
   ui.result?.classList.add("is-visible");
 }
 
+function applyQualityMode(low, notify = true) {
+  lowQualityMode = low;
+  renderer.setPixelRatio(low ? 1 : Math.min(window.devicePixelRatio, 1.65));
+  renderer.shadowMap.enabled = !low;
+  if (sunLight) sunLight.castShadow = !low;
+  if (ui.quality) ui.quality.checked = low;
+  if (notify) showToast(low ? "性能模式已开启" : "写实画质已开启");
+}
+
+function updatePerformanceGovernor(delta) {
+  performanceWindow += delta;
+  performanceFrames += 1;
+  if (performanceWindow < 2) return;
+  const fps = performanceFrames / performanceWindow;
+  performanceDrops = fps < 42 ? performanceDrops + 1 : Math.max(0, performanceDrops - 1);
+  if (!lowQualityMode && performanceDrops >= 2) {
+    applyQualityMode(true);
+    performanceDrops = 0;
+  }
+  performanceWindow = 0;
+  performanceFrames = 0;
+}
+
 function animate() {
   requestAnimationFrame(animate);
   const delta = Math.min(clock.getDelta(), 0.05);
@@ -4623,6 +4835,7 @@ function animate() {
     if (!playerDead && firing && currentWeaponType === "rifle") shoot();
     updatePlayer(delta);
     updateBots(delta);
+    updateProjectiles(delta);
     updateGrenades(delta);
     updateDecals(delta);
     updateObjectives(delta);
@@ -4630,7 +4843,11 @@ function animate() {
     lastMouseX *= Math.max(0, 1 - delta * 8);
     lastMouseY *= Math.max(0, 1 - delta * 8);
     updateWeapon(delta);
-    updateRadar();
+    radarUpdateTimer -= delta;
+    if (radarUpdateTimer <= 0) {
+      updateRadar();
+      radarUpdateTimer = lowQualityMode ? 0.18 : 0.1;
+    }
     // Sync third-person model to the player (feet at camera minus eye height).
     if (playerModel) {
       playerModel.position.set(camera.position.x, camera.position.y - EYE_HEIGHT, camera.position.z);
@@ -4675,7 +4892,7 @@ function animate() {
   if (viewMode === "tps") {
     // Pull the render camera back along the view direction; restore after render
     // so all game logic stays anchored to camera.position.
-    const back = new THREE.Vector3();
+    const back = tmpV5;
     camera.getWorldDirection(back);
     camera.position.addScaledVector(back, -TP_DISTANCE);
     camera.position.y += 0.4;
@@ -4685,6 +4902,7 @@ function animate() {
   } else {
     renderer.render(scene, camera);
   }
+  updatePerformanceGovernor(delta);
 }
 
 function bindEvents() {
@@ -4758,10 +4976,7 @@ function bindEvents() {
     masterVolume = Number(ui.volume.value);
   });
   ui.quality?.addEventListener("change", () => {
-    const low = ui.quality.checked;
-    renderer.setPixelRatio(low ? 1 : Math.min(window.devicePixelRatio, 1.8));
-    renderer.shadowMap.enabled = !low;
-    showToast(low ? "性能模式已开启" : "画质模式已开启");
+    applyQualityMode(ui.quality.checked);
   });
   ui.resume?.addEventListener("click", () => {
     ui.settings?.classList.remove("is-visible");

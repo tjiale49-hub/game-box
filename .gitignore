@@ -2,4 +2,5 @@ node_modules/
 .tools/
 tmp-strike-*.png
 tmp-remotion-*.png
+tmp-*.png
 assets/*-chroma.png

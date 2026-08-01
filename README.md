@@ -2,6 +2,8 @@
 
 这是一个纯静态初版网页界面，可以直接打开 `index.html` 预览。
 
+UE5 正式客户端的技术与迁移方案见 [docs/UE5_PRODUCTION_BLUEPRINT.md](./docs/UE5_PRODUCTION_BLUEPRINT.md)。
+
 ## 已接入游戏
 
 - `games/strike-arena/`：高能突击，网页 3D FPS 原型，包含电影感游戏官网首页、自然场景地图、真实人形敌人、独立模式大厅、团队竞技、爆破模拟、生存突围、狙击训练、BOT 训练、地图切换、武器参数、HUD 和计分。
