@@ -66,9 +66,6 @@ let enemyTexture;
 let enemyTextures = [];
 let enemyActionTexture;
 let enemyFrames = {};
-let urbanBackdropTexture;
-let natureBackdropTexture;
-let alpineBackdropTexture;
 let buildingFacades = {};
 let weapon;
 let muzzleLight;
@@ -1059,9 +1056,6 @@ function loadProjectTextures() {
   const loadTexture = (src) => textureLoader.load(src, (texture) => {
     texture.needsUpdate = true;
   });
-  urbanBackdropTexture = loadTexture("../../assets/strike-urban-backdrop-v2.jpg");
-  natureBackdropTexture = loadTexture("../../assets/strike-nature-backdrop-v2.jpg");
-  alpineBackdropTexture = loadTexture("../../assets/strike-alpine-backdrop-v2.jpg");
   enemyTextures = [
     "../../assets/strike-enemy-operator-game.png",
     "../../assets/strike-enemy-scout-game.png",
@@ -1103,9 +1097,6 @@ function loadProjectTextures() {
   };
   enemyTexture = enemyTextures[0];
   [
-    urbanBackdropTexture,
-    natureBackdropTexture,
-    alpineBackdropTexture,
     ...Object.values(enemyFrames).flat(),
     ...Object.values(buildingFacades),
   ].filter(Boolean).forEach((texture) => {
@@ -1124,7 +1115,17 @@ function getFacadeTexture() {
 }
 
 function isNightMap() {
-  return selectedMap.name === "夜间工厂" || selectedMap.name === "雨夜港区";
+  return selectedMap === MAPS.night || selectedMap === MAPS.harbor;
+}
+
+function getEnvironmentPalette() {
+  if (isNightMap()) return { fog: 0x111923, skyTop: 0x07101c, skyBottom: 0x182536 };
+  if (selectedMap.nature === "snow") return { fog: 0xa9bac4, skyTop: 0x6f91aa, skyBottom: 0xc6d1d7 };
+  if (selectedMap.nature) return { fog: 0x667a6b, skyTop: 0x426b73, skyBottom: 0xa5ad91 };
+  if (selectedMap === MAPS.desert || selectedMap === MAPS.deserttown || selectedMap === MAPS.range) {
+    return { fog: 0x756b5b, skyTop: 0x526f88, skyBottom: 0xc3a675 };
+  }
+  return { fog: 0x596773, skyTop: 0x3f5f7a, skyBottom: 0x9fa8ad };
 }
 
 function createGroundMaterial() {
@@ -1262,9 +1263,10 @@ function createGroundMaterial() {
 }
 
 function initScene() {
+  const environment = getEnvironmentPalette();
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(selectedMap.sky);
-  scene.fog = new THREE.FogExp2(selectedMap.fog, selectedMode === MODES.sniper ? 0.011 : 0.014);
+  scene.background = new THREE.Color(environment.fog);
+  scene.fog = new THREE.FogExp2(environment.fog, selectedMode === MODES.sniper ? 0.008 : 0.0105);
 
   camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.1, 600);
   camera.rotation.order = "YXZ";
@@ -1280,7 +1282,7 @@ function initScene() {
   if (THREE.SRGBColorSpace) renderer.outputColorSpace = THREE.SRGBColorSpace;
   if (THREE.ACESFilmicToneMapping) {
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = selectedMap.nature ? 1.16 : 1.04;
+    renderer.toneMappingExposure = isNightMap() ? 1.02 : selectedMap.nature ? 1.24 : 1.16;
   }
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -1302,14 +1304,14 @@ function initScene() {
   reserve = Math.round(selectedWeapon.reserve * selectedMode.reserveScale);
 
   const hemi = new THREE.HemisphereLight(
-    selectedMap.nature ? 0xb8d4e8 : 0xd9e6ff,
+    selectedMap.nature ? 0xd4e6ed : 0xe7efff,
     selectedMap.ground,
-    selectedMap.nature ? 0.85 : 1.05,
+    isNightMap() ? 0.72 : selectedMap.nature ? 1.12 : 1.18,
   );
   scene.add(hemi);
 
   // Ambient fill to prevent pure black shadows.
-  const ambient = new THREE.AmbientLight(0x1a2030, 0.35);
+  const ambient = new THREE.AmbientLight(isNightMap() ? 0x1a2030 : 0x53606b, isNightMap() ? 0.35 : 0.48);
   scene.add(ambient);
 
   sunLight = new THREE.DirectionalLight(0xfff4e0, 2.4);
@@ -1339,8 +1341,8 @@ function initScene() {
   const skyGeo = new THREE.SphereGeometry(280, 32, 16);
   const skyMat = new THREE.ShaderMaterial({
     uniforms: {
-      topColor: { value: new THREE.Color(selectedMap.nature ? 0x1a3050 : 0x0a1428) },
-      bottomColor: { value: new THREE.Color(selectedMap.sky) },
+      topColor: { value: new THREE.Color(environment.skyTop) },
+      bottomColor: { value: new THREE.Color(environment.skyBottom) },
       offset: { value: 20 },
       exponent: { value: 0.5 },
     },
@@ -1408,7 +1410,7 @@ function applyScenarioText() {
 }
 
 function createArena() {
-  createCinematicBackdrop();
+  createDistantEnvironment();
 
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(130, 130, 1, 1),
@@ -1707,36 +1709,212 @@ function buildSnowBase() {
   addBox([0, 4, -40, 1.2, 8, 1.2], makeMaterial(0x4a5864, 0.5, 0.4), true);
 }
 
-function createCinematicBackdrop() {
+function createDistantEnvironment() {
   const industrialNature = ["coast", "harbor", "quarry"];
-  const backdropTexture = selectedMap.nature === "snow"
-    ? alpineBackdropTexture
-    : (!selectedMap.nature || industrialNature.includes(selectedMap.nature))
-      ? urbanBackdropTexture
-      : natureBackdropTexture;
-  if (!backdropTexture) return;
+  if (!selectedMap.nature || industrialNature.includes(selectedMap.nature)) {
+    createDistantIndustrialZone();
+  } else {
+    createDistantMountainZone();
+  }
+}
 
-  const geometry = new THREE.PlaneGeometry(170, 95.625);
-  const material = new THREE.MeshBasicMaterial({
-    map: backdropTexture,
-    color: isNightMap() ? 0xa8b0bd : 0xffffff,
-    depthWrite: true,
-    depthTest: true,
-    fog: false,
+function createOuterGround(color, roughness = 0.96) {
+  const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(340, 340),
+    new THREE.MeshStandardMaterial({ color, roughness, metalness: 0.01 }),
+  );
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -0.14;
+  ground.receiveShadow = true;
+  scene.add(ground);
+}
+
+function createDistantIndustrialZone() {
+  createOuterGround(selectedMap.nature === "coast" || selectedMap.nature === "harbor" ? 0x26343a : 0x313133);
+  const rng = mulberry32((selectedMap.sky ^ selectedMap.fog ^ 0x5f3759df) >>> 0);
+  const facade = getFacadeTexture();
+  const facadeMat = new THREE.MeshStandardMaterial({
+    map: facade,
+    color: isNightMap() ? 0x74808d : 0xa9a7a0,
+    roughness: 0.9,
+    metalness: 0.04,
   });
-  const sides = [
-    [0, 30, -64, 0],
-    [0, 30, 64, Math.PI],
-    [-64, 30, 0, Math.PI / 2],
-    [64, 30, 0, -Math.PI / 2],
-  ];
-  sides.forEach(([x, y, z, rotationY]) => {
-    const backdrop = new THREE.Mesh(geometry, material);
-    backdrop.position.set(x, y, z);
-    backdrop.rotation.y = rotationY;
-    backdrop.renderOrder = -20;
-    scene.add(backdrop);
+  const buildingMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), facadeMat, 34);
+  const dummy = new THREE.Object3D();
+  for (let i = 0; i < 34; i += 1) {
+    const angle = (i / 34) * Math.PI * 2 + (rng() - 0.5) * 0.12;
+    const radius = 79 + rng() * 36;
+    const w = 9 + rng() * 17;
+    const d = 8 + rng() * 14;
+    const h = 11 + rng() * 34;
+    dummy.position.set(Math.cos(angle) * radius, h / 2 - 0.1, Math.sin(angle) * radius);
+    dummy.rotation.y = -angle + (rng() - 0.5) * 0.35;
+    dummy.scale.set(w, h, d);
+    dummy.updateMatrix();
+    buildingMesh.setMatrixAt(i, dummy.matrix);
+  }
+  buildingMesh.receiveShadow = true;
+  buildingMesh.instanceMatrix.needsUpdate = true;
+  scene.add(buildingMesh);
+
+  const stackMat = makeMaterial(0x4f5558, 0.72, 0.28);
+  const capMat = makeMaterial(0x1e2428, 0.58, 0.42);
+  for (let i = 0; i < 8; i += 1) {
+    const angle = (i / 8) * Math.PI * 2 + 0.28;
+    const radius = 74 + (i % 3) * 9;
+    const h = 18 + (i % 4) * 5;
+    const stack = new THREE.Mesh(new THREE.CylinderGeometry(1.15, 1.8, h, 16), stackMat);
+    stack.position.set(Math.cos(angle) * radius, h / 2, Math.sin(angle) * radius);
+    scene.add(stack);
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(1.35, 1.35, 0.7, 16), capMat);
+    cap.position.set(stack.position.x, h + 0.15, stack.position.z);
+    scene.add(cap);
+  }
+
+  createDistantCrane(-76, -42, 0.18, 1.1);
+  createDistantCrane(81, 24, -0.42, 0.86);
+}
+
+function createDistantCrane(x, z, rotationY, scale) {
+  const group = new THREE.Group();
+  const steel = makeMaterial(0x687078, 0.56, 0.6);
+  const dark = makeMaterial(0x20262c, 0.68, 0.34);
+  const tower = new THREE.Mesh(new THREE.BoxGeometry(1.2, 27, 1.2), steel);
+  tower.position.y = 13.5;
+  group.add(tower);
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(30, 0.8, 0.8), steel);
+  arm.position.set(8.8, 26, 0);
+  group.add(arm);
+  const counterWeight = new THREE.Mesh(new THREE.BoxGeometry(4.8, 2.5, 2.2), dark);
+  counterWeight.position.set(-4.8, 24.8, 0);
+  group.add(counterWeight);
+  const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 13, 8), dark);
+  cable.position.set(16, 19.2, 0);
+  group.add(cable);
+  group.position.set(x, 0, z);
+  group.rotation.y = rotationY;
+  group.scale.setScalar(scale);
+  scene.add(group);
+}
+
+function createDistantMountainZone() {
+  const snowy = selectedMap.nature === "snow";
+  createOuterGround(snowy ? 0x8d9ba4 : 0x26362b);
+  const rng = mulberry32((selectedMap.sky ^ selectedMap.fog ^ 0x9e3779b9) >>> 0);
+  const mountainMat = new THREE.MeshStandardMaterial({
+    color: snowy ? 0x647580 : 0x33443a,
+    roughness: 1,
+    metalness: 0,
+    flatShading: false,
   });
+  const snowMat = new THREE.MeshStandardMaterial({
+    color: 0xd9e2e6,
+    roughness: 0.92,
+    metalness: 0,
+    flatShading: false,
+  });
+  const mountainGeometry = createMountainGeometry();
+  for (let i = 0; i < 26; i += 1) {
+    const angle = (i / 26) * Math.PI * 2 + (rng() - 0.5) * 0.1;
+    const radius = 96 + rng() * 46;
+    const width = 17 + rng() * 13;
+    const depth = 16 + rng() * 12;
+    const height = 16 + rng() * 15;
+    const mountain = new THREE.Mesh(mountainGeometry, mountainMat);
+    mountain.position.set(Math.cos(angle) * radius, height / 2 - 1, Math.sin(angle) * radius);
+    mountain.rotation.y = rng() * Math.PI;
+    mountain.scale.set(width, height, depth);
+    mountain.receiveShadow = true;
+    scene.add(mountain);
+    if (snowy) {
+      const cap = new THREE.Mesh(mountainGeometry, snowMat);
+      cap.position.set(mountain.position.x, height * 0.76, mountain.position.z);
+      cap.rotation.y = mountain.rotation.y;
+      cap.scale.set(width * 0.34, height * 0.3, depth * 0.34);
+      scene.add(cap);
+    }
+  }
+
+  createDistantForestRing(snowy, rng);
+  createDistantOutpost(snowy, rng);
+}
+
+function createMountainGeometry() {
+  const geometry = new THREE.ConeGeometry(1, 1, 24, 12);
+  const positions = geometry.attributes.position;
+  for (let i = 0; i < positions.count; i += 1) {
+    const x = positions.getX(i);
+    const y = positions.getY(i);
+    const z = positions.getZ(i);
+    const angle = Math.atan2(z, x);
+    const heightBand = y + 0.5;
+    const ridge = 0.88
+      + Math.sin(angle * 3 + 0.8) * 0.08
+      + Math.sin(angle * 7 - 0.35) * 0.045
+      + Math.sin(heightBand * 18 + angle * 4) * 0.025;
+    positions.setX(i, x * ridge);
+    positions.setZ(i, z * ridge);
+    positions.setY(i, y + Math.sin(angle * 5 + heightBand * 8) * 0.018 * (1 - heightBand));
+  }
+  positions.needsUpdate = true;
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function createDistantForestRing(snowy, rng) {
+  const count = 64;
+  const trunkMesh = new THREE.InstancedMesh(
+    new THREE.CylinderGeometry(0.18, 0.28, 2.6, 7),
+    makeMaterial(0x3d3026, 0.94, 0),
+    count,
+  );
+  const crownMesh = new THREE.InstancedMesh(
+    new THREE.ConeGeometry(1, 3.4, 8),
+    makeMaterial(snowy ? 0xbecdd1 : 0x1d3b27, 0.96, 0),
+    count,
+  );
+  const dummy = new THREE.Object3D();
+  for (let i = 0; i < count; i += 1) {
+    const angle = (i / count) * Math.PI * 2 + (rng() - 0.5) * 0.12;
+    const radius = 68 + rng() * 26;
+    const scale = 1.2 + rng() * 1.8;
+    const x = Math.cos(angle) * radius;
+    const z = Math.sin(angle) * radius;
+    dummy.position.set(x, 1.3 * scale, z);
+    dummy.scale.set(scale, scale, scale);
+    dummy.rotation.y = rng() * Math.PI;
+    dummy.updateMatrix();
+    trunkMesh.setMatrixAt(i, dummy.matrix);
+    dummy.position.y = 4.2 * scale;
+    dummy.updateMatrix();
+    crownMesh.setMatrixAt(i, dummy.matrix);
+  }
+  trunkMesh.instanceMatrix.needsUpdate = true;
+  crownMesh.instanceMatrix.needsUpdate = true;
+  scene.add(trunkMesh, crownMesh);
+}
+
+function createDistantOutpost(snowy, rng) {
+  const wallMat = makeMaterial(snowy ? 0x667580 : 0x3f4b43, 0.82, 0.08);
+  const roofMat = makeMaterial(0x22292d, 0.64, 0.32);
+  const angle = selectedMap.nature === "research" ? -0.7 : 2.3;
+  const centerX = Math.cos(angle) * 72;
+  const centerZ = Math.sin(angle) * 72;
+  for (let i = 0; i < 7; i += 1) {
+    const w = 6 + rng() * 5;
+    const d = 4 + rng() * 4;
+    const h = 3 + rng() * 4;
+    const x = centerX + (i % 3 - 1) * 10 + (rng() - 0.5) * 3;
+    const z = centerZ + (Math.floor(i / 3) - 1) * 9 + (rng() - 0.5) * 3;
+    const module = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wallMat);
+    module.position.set(x, h / 2, z);
+    module.rotation.y = -angle;
+    scene.add(module);
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(w + 0.7, 0.28, d + 0.7), roofMat);
+    roof.position.set(x, h + 0.14, z);
+    roof.rotation.y = -angle;
+    scene.add(roof);
+  }
 }
 
 function addBox([x, y, z, sx, sy, sz], material, collidable) {
@@ -2320,9 +2498,6 @@ function createNatureLayer() {
   for (let i = 0; i < 16; i += 1) {
     createCanopyShadow(-36 + Math.random() * 72, -36 + Math.random() * 72, 4 + Math.random() * 11, 1.2 + Math.random() * 4, sparse ? 0.08 : 0.13);
   }
-  for (let i = 0; i < (sparse ? 4 : 8); i += 1) {
-    createLightRay(-30 + Math.random() * 60, -28 + Math.random() * 48, 2.2 + Math.random() * 4.5, 7 + Math.random() * 8, sparse ? 0.045 : 0.075);
-  }
   if (selectedMap.nature === "coast") {
     createWaterPatch(28, 0, 24, 86);
     addBox([11, 0.18, 0, 1.2, 0.36, 86], makeMaterial(0x777064, 0.88, 0.03), true);
@@ -2330,17 +2505,6 @@ function createNatureLayer() {
   if (selectedMap.nature === "wetlands" || selectedMap.nature === "forest" || selectedMap.nature === "village") {
     createWaterPatch(-18, -6, 7, 52);
     createWaterPatch(22, 18, 8, 28);
-  }
-  for (let i = 0; i < 7; i += 1) {
-    createFogSheet(
-      -30 + Math.random() * 60,
-      1.6 + Math.random() * 2.8,
-      -31 + Math.random() * 48,
-      14 + Math.random() * 20,
-      3.2 + Math.random() * 3.6,
-      selectedMap.nature === "forest" || selectedMap.nature === "village" || selectedMap.nature === "research" ? 0.06 : 0.08,
-      -0.65 + Math.random() * 1.3,
-    );
   }
 }
 
